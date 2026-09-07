@@ -1,0 +1,10 @@
+node_modules
+dist
+__pycache__
+*.pyc
+.venv
+.pytest_cache
+test_*.db
+test_uploads
+.git
+.idea

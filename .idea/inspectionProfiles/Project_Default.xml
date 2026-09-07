@@ -1,0 +1,74 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="django-tenants" />
+          <option value="django-celery-beat" />
+          <option value="channels" />
+          <option value="channels-redis" />
+          <option value="daphne" />
+          <option value="drf-yasg" />
+          <option value="python-magic" />
+          <option value="weasyprint" />
+          <option value="reportlab" />
+          <option value="qrcode" />
+          <option value="boto3" />
+          <option value="pytest-django" />
+          <option value="pytest-cov" />
+          <option value="factory-boy" />
+          <option value="flake8" />
+          <option value="black" />
+          <option value="isort" />
+          <option value="django-axes" />
+          <option value="Django" />
+          <option value="djangorestframework" />
+          <option value="django-cors-headers" />
+          <option value="django-filter" />
+          <option value="djangorestframework-simplejwt" />
+          <option value="psycopg2-binary" />
+          <option value="redis" />
+          <option value="django-redis" />
+          <option value="celery" />
+          <option value="drf-spectacular" />
+          <option value="drf-spectacular-sidecar" />
+          <option value="Pillow" />
+          <option value="python-dotenv" />
+          <option value="whitenoise" />
+          <option value="requests" />
+          <option value="python-dateutil" />
+          <option value="gunicorn" />
+          <option value="pytest" />
+          <option value="django-jazzmin" />
+          <option value="h2" />
+          <option value="hpack" />
+          <option value="hyperframe" />
+          <option value="priority" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N806" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="djangorestframework" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="google.*" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
