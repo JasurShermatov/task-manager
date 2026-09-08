@@ -93,30 +93,34 @@ def checklist_kb(lang: str, tk: dict) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-# menu button -> permission it needs (None = everyone)
+# menu button -> (permission it needs [None = everyone], roles that never see it even with the permission)
+# "admin" (superadmin/IT egasi) faqat kuzatadi va vazifa beradi - o'zi hech qachon ijrochi yoki
+# tekshiruvchi bo'lmaydi (default_reviewer ham admin'ni hech qachon tanlamaydi), shuning uchun
+# "o'z vazifangni bajarish" tugmalari (Vazifalarim/Kunlik hisobot/Muammo/Tekshiruv) unga ko'rsatilmaydi -
+# aks holda doim bo'sh ro'yxatga olib boradi va chalkashtiradi.
 MENU = [
-    ("btn_my", None),
-    ("btn_report", "progress.create"),
-    ("btn_review", "tasks.accept"),
-    ("btn_new", "tasks.create"),
-    ("btn_problem", "tasks.block"),
-    ("btn_overdue", "reports.read"),
-    ("btn_blocked", "reports.read"),
-    ("btn_reports", "reports.read"),
-    ("btn_team", "admin.users"),
-    ("btn_search", None),
-    ("btn_lang", None),
-    ("btn_help", None),
+    ("btn_my", None, {"admin", "kuzatuvchi"}),
+    ("btn_report", "progress.create", {"admin"}),
+    ("btn_review", "tasks.accept", {"admin"}),
+    ("btn_new", "tasks.create", set()),
+    ("btn_problem", "tasks.block", {"admin"}),
+    ("btn_overdue", "reports.read", set()),
+    ("btn_blocked", "reports.read", set()),
+    ("btn_reports", "reports.read", set()),
+    ("btn_team", "admin.users", set()),
+    ("btn_search", None, set()),
+    ("btn_lang", None, set()),
+    ("btn_help", None, set()),
 ]
 
 
-def menu_keys(lang: str, perms: set[str]) -> list[str]:
-    return [t(lang, k) for k, need in MENU if need is None or need in perms]
+def menu_keys(lang: str, perms: set[str], role: str | None = None) -> list[str]:
+    return [t(lang, k) for k, need, hide_for in MENU if (need is None or need in perms) and role not in hide_for]
 
 
-def main_menu(lang: str, perms: set[str]) -> ReplyKeyboardMarkup:
+def main_menu(lang: str, perms: set[str], role: str | None = None) -> ReplyKeyboardMarkup:
     """The keyboard is built from the user's own permissions - each role gets its own bot."""
-    keys = menu_keys(lang, perms)
+    keys = menu_keys(lang, perms, role)
     rows = [[KeyboardButton(text=k) for k in keys[i:i + 2]] for i in range(0, len(keys), 2)]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
@@ -145,7 +149,8 @@ def confirm_card(lang: str, d: dict, names: dict) -> str:
         warn += t(lang, "no_deadline_warn")
     desc = f"\n📝 {d['description'][:200]}" if d.get("description") else ""
     return t(lang, "confirm_card", voice=voice, title=d.get("title") or "—",
-             assignee=names.get("assignee") or t(lang, "not_set"), start=fmt_date(d.get("planned_start")),
+             assignee=names.get("assignee") or t(lang, "not_set"),
+             reviewer=names.get("reviewer") or t(lang, "not_set"), start=fmt_date(d.get("planned_start")),
              end=fmt_date(d.get("planned_end")), prio=prio_label(lang, d.get("priority") or "normal"),
              project=names.get("project") or t(lang, "not_set"), loc=names.get("location") or t(lang, "not_set"),
              type=names.get("type") or t(lang, "not_set"), desc=desc, warn=warn)
@@ -171,6 +176,7 @@ def edit_menu_kb(lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text=t(lang, "e_title"), callback_data="nt:edit:title"),
           InlineKeyboardButton(text=t(lang, "e_assignee"), callback_data="nt:edit:assignee"))
+    b.row(InlineKeyboardButton(text=t(lang, "e_reviewer"), callback_data="nt:edit:reviewer"))
     b.row(InlineKeyboardButton(text=t(lang, "e_deadline"), callback_data="nt:edit:deadline"),
           InlineKeyboardButton(text=t(lang, "e_prio"), callback_data="nt:edit:prio"))
     b.row(InlineKeyboardButton(text=t(lang, "e_project"), callback_data="nt:edit:project"),

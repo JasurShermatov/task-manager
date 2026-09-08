@@ -61,6 +61,10 @@ def perms_of(u: dict | None) -> set[str]:
     return set(((u or {}).get("role") or {}).get("permissions_json") or [])
 
 
+def role_of(u: dict | None) -> str:
+    return ((u or {}).get("role") or {}).get("code") or ""
+
+
 def is_cancel(msg: Message, lang: str) -> bool:
     txt = (msg.text or "").strip()
     return txt in {T[l]["btn_cancel"] for l in T} or txt in ("/cancel", "/bekor")
@@ -128,6 +132,7 @@ class Search(StatesGroup):
 class NewTask(StatesGroup):
     project = State()
     assignee = State()
+    reviewer = State()
     assignee_search = State()
     title = State()
     deadline = State()
@@ -145,7 +150,7 @@ class NewTask(StatesGroup):
 async def start(msg: Message, state: FSMContext, u: dict | None, lang: str, command: CommandObject = None):
     await state.clear()
     if u:
-        await msg.answer(t(lang, "menu"), reply_markup=main_menu(lang, perms_of(u)))
+        await msg.answer(t(lang, "menu"), reply_markup=main_menu(lang, perms_of(u), role_of(u)))
         return
     await msg.answer(t(lang, "welcome_unlinked"), reply_markup=ReplyKeyboardRemove())
     await state.set_state(Link.code)
@@ -162,7 +167,7 @@ async def link_code(msg: Message, state: FSMContext, lang: str):
     lang = user.get("lang") or lang
     await state.clear()
     await msg.answer(t(lang, "linked", name=user["full_name"], role=user["role"]["name"]),
-                     reply_markup=main_menu(lang, perms_of(user)))
+                     reply_markup=main_menu(lang, perms_of(user), role_of(user)))
 
 
 @router.message(Link.code)
@@ -188,7 +193,7 @@ async def lang_set(cb: CallbackQuery, u: dict | None):
         UserMiddleware.invalidate(cb.from_user.id)
         u = dict(u, lang=new)
     await cb.message.edit_text(t(new, "lang_set"))
-    await cb.message.answer(t(new, "menu"), reply_markup=main_menu(new, perms_of(u)))
+    await cb.message.answer(t(new, "menu"), reply_markup=main_menu(new, perms_of(u), role_of(u)))
 
 
 @router.message(Command("help", "yordam"))
@@ -202,7 +207,7 @@ async def help_cmd(msg: Message, lang: str):
 @router.message(Command("cancel", "bekor"))
 async def cancel_any(msg: Message, state: FSMContext, u: dict | None, lang: str):
     await state.clear()
-    await msg.answer(t(lang, "cancelled"), reply_markup=main_menu(lang, perms_of(u)) if u else ReplyKeyboardRemove())
+    await msg.answer(t(lang, "cancelled"), reply_markup=main_menu(lang, perms_of(u), role_of(u)) if u else ReplyKeyboardRemove())
 
 
 # ============ my tasks / review queue ============
@@ -259,7 +264,7 @@ async def search_btn(msg: Message, state: FSMContext, u: dict | None, lang: str)
 @router.message(Search.q)
 async def search_q(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.clear()
-    await msg.answer("…", reply_markup=main_menu(lang, perms_of(u)))
+    await msg.answer("…", reply_markup=main_menu(lang, perms_of(u), role_of(u)))
     await do_search(msg, u, lang, msg.text or "")
 
 
@@ -443,7 +448,7 @@ async def ret_reason(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.clear()
     try:
         await api.return_task(u["id"], d["tid"], msg.text or "")
-        await msg.answer(t(lang, "returned"), reply_markup=main_menu(lang, perms_of(u)))
+        await msg.answer(t(lang, "returned"), reply_markup=main_menu(lang, perms_of(u), role_of(u)))
         await show_task(msg, lang, u, d["tid"])
     except ApiError as e:
         await err(msg, lang, e)
@@ -455,7 +460,7 @@ async def cmt_text(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.clear()
     try:
         await api.comment(u["id"], d["tid"], msg.text or msg.caption or "")
-        await msg.answer(t(lang, "commented"), reply_markup=main_menu(lang, perms_of(u)))
+        await msg.answer(t(lang, "commented"), reply_markup=main_menu(lang, perms_of(u), role_of(u)))
     except ApiError as e:
         await err(msg, lang, e)
 
@@ -476,8 +481,16 @@ async def report_cmd(msg: Message, state: FSMContext, u: dict | None, lang: str)
     if len(items) == 1:
         return await start_report(msg, state, u, lang, items[0]["id"])
     await state.set_state(Report.task)
-    b = list_kb([{"id": x["id"], "name": f"{x['code']} · {x['title']}"} for x in items], "rep")
-    await msg.answer(t(lang, "pick_task"), reply_markup=b)
+    picks = [{"id": x["id"], "name": f"{x['code']} · {x['title']}"} for x in items]
+    await state.update_data(_rep_items=picks)
+    await msg.answer(t(lang, "pick_task"), reply_markup=list_kb(picks, "rep"))
+
+
+@router.callback_query(F.data.startswith("rep_pg:"))
+async def rep_page(cb: CallbackQuery, state: FSMContext, lang: str):
+    d = await state.get_data()
+    await cb.message.edit_reply_markup(reply_markup=list_kb(d.get("_rep_items", []), "rep", page=int(cb.data.split(":")[1])))
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("rep:"))
@@ -568,7 +581,7 @@ async def report_done(msg: Message, state: FSMContext, u: dict, lang: str):
             total=tk.get("actual_quantity") or 0, plan=plan or "—", pct=pct)
     if d.get("dup"):
         txt += "\n" + t(lang, "report_dup")
-    await msg.answer(txt, reply_markup=main_menu(lang, perms_of(u)))
+    await msg.answer(txt, reply_markup=main_menu(lang, perms_of(u), role_of(u)))
 
 
 # ============ block (/muammo) ============
@@ -585,7 +598,16 @@ async def problem_cmd(msg: Message, state: FSMContext, u: dict | None, lang: str
     if not items:
         return await msg.answer(t(lang, "no_tasks"))
     await state.set_state(Block.task)
-    await msg.answer(t(lang, "pick_task"), reply_markup=list_kb([{"id": x["id"], "name": f"{x['code']} · {x['title']}"} for x in items], "blkt"))
+    picks = [{"id": x["id"], "name": f"{x['code']} · {x['title']}"} for x in items]
+    await state.update_data(_blk_items=picks)
+    await msg.answer(t(lang, "pick_task"), reply_markup=list_kb(picks, "blkt"))
+
+
+@router.callback_query(F.data.startswith("blkt_pg:"))
+async def blkt_page(cb: CallbackQuery, state: FSMContext, lang: str):
+    d = await state.get_data()
+    await cb.message.edit_reply_markup(reply_markup=list_kb(d.get("_blk_items", []), "blkt", page=int(cb.data.split(":")[1])))
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("blkt:"))
@@ -612,7 +634,7 @@ async def block_note(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.clear()
     try:
         await api.block(u["id"], d["tid"], d["reason"], msg.text or "")
-        await msg.answer(t(lang, "problem_saved"), reply_markup=main_menu(lang, perms_of(u)))
+        await msg.answer(t(lang, "problem_saved"), reply_markup=main_menu(lang, perms_of(u), role_of(u)))
         await show_task(msg, lang, u, d["tid"])
     except ApiError as e:
         await err(msg, lang, e)
@@ -621,6 +643,46 @@ async def block_note(msg: Message, state: FSMContext, u: dict, lang: str):
 # ============ NEW TASK: wizard + voice ============
 def _can_create(u: dict | None) -> bool:
     return bool(u) and "tasks.create" in perms_of(u)
+
+
+def _has(x: dict, perm: str) -> bool:
+    return perm in ((x.get("role") or {}).get("permissions_json") or [])
+
+
+def _can_accept(x: dict) -> bool:
+    """Vazifani qabul qila oladimi - tekshiruvchi qilib tayinlash mumkinmi."""
+    return _has(x, "tasks.accept")
+
+
+def _can_do(x: dict) -> bool:
+    """Ishni bajara oladimi - bajaruvchi qilib tayinlash mumkinmi."""
+    return _has(x, "tasks.start")
+
+
+async def default_reviewer(uid: int, project_id: int | None, creator_id: int) -> dict | None:
+    """Kim tekshiradi: loyihaning tekshiruvchisi -> rahbari -> (topilmasa) "tasks.accept" huquqi bor
+    boshqa odam (masalan superadmin). Bu huquqi yo'q odam (masalan prorab) hech qachon tanlanmaydi -
+    aks holda vazifa hech kim qabul qila olmaydigan holatda tekshiruvda abadiy osilib qoladi."""
+    if not project_id:
+        return None
+    try:
+        users = [x for x in await api.users(uid, project_id=project_id) if x["id"] != creator_id and _can_accept(x)]
+    except ApiError:
+        return None
+    order = {"tekshiruvchi": 0, "rahbar": 1}
+    users.sort(key=lambda x: order.get((x.get("role") or {}).get("code", ""), 2))
+    return users[0] if users else None
+
+
+async def _apply_default_reviewer(state: FSMContext, u: dict):
+    d = await state.get_data()
+    if d.get("reviewer_id") and d.get("reviewer_id") != u["id"]:
+        return
+    rev = await default_reviewer(u["id"], d.get("project_id"), d.get("assignee_id") or 0)
+    if rev and rev["id"] != d.get("assignee_id"):
+        await state.update_data(reviewer_id=rev["id"], reviewer_name=rev["full_name"])
+    else:
+        await state.update_data(reviewer_id=u["id"], reviewer_name=u["full_name"])
 
 
 async def _names(uid: int, d: dict) -> dict:
@@ -634,6 +696,11 @@ async def _names(uid: int, d: dict) -> dict:
             if not names["assignee"]:
                 users = await api.users(uid)
                 names["assignee"] = next((x["full_name"] for x in users if x["id"] == d["assignee_id"]), None)
+        if d.get("reviewer_id"):
+            names["reviewer"] = d.get("reviewer_name")
+            if not names["reviewer"]:
+                users = await api.users(uid)
+                names["reviewer"] = next((x["full_name"] for x in users if x["id"] == d["reviewer_id"]), None)
         names["location"] = d.get("location_name")
         names["type"] = d.get("type_name")
     except ApiError:
@@ -683,11 +750,20 @@ async def ask_project(msg: Message, state: FSMContext, u: dict, lang: str, edit_
         await state.update_data(project_id=projects[0]["id"], project_name=projects[0]["name"])
         return await ask_assignee(msg, state, u, lang)
     await state.set_state(NewTask.project)
-    kb = list_kb(projects, "ntp")
+    picks = [{"id": p["id"], "name": p["name"]} for p in projects]
+    await state.update_data(_projects=picks)
+    kb = list_kb(picks, "ntp")
     if edit_cb:
         await edit_cb.message.edit_text(t(lang, "nt_project"), reply_markup=kb)
     else:
         await msg.answer(t(lang, "nt_project"), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("ntp_pg:"))
+async def ntp_page(cb: CallbackQuery, state: FSMContext, lang: str):
+    d = await state.get_data()
+    await cb.message.edit_reply_markup(reply_markup=list_kb(d.get("_projects", []), "ntp", page=int(cb.data.split(":")[1])))
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("ntp:"))
@@ -695,7 +771,9 @@ async def nt_project(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
     pid = int(cb.data.split(":")[1])
     projects = await api.projects(u["id"])
     p = next((x for x in projects if x["id"] == pid), None)
-    await state.update_data(project_id=pid, project_name=p["name"] if p else None, location_id=None, location_name=None)
+    await state.update_data(project_id=pid, project_name=p["name"] if p else None, location_id=None, location_name=None,
+                            reviewer_id=None, reviewer_name=None)
+    await _apply_default_reviewer(state, u)
     await cb.answer()
     d = await state.get_data()
     if d.get("_editing") or d.get("title"):
@@ -706,7 +784,9 @@ async def nt_project(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
 
 async def ask_assignee(msg: Message, state: FSMContext, u: dict, lang: str, edit_msg=False, page=0):
     d = await state.get_data()
-    users = await api.users(u["id"], project_id=d.get("project_id"), role="bajaruvchi,prorab,rahbar,tekshiruvchi")
+    # faqat ishni bajara oladigan odam (tasks.start) - tekshiruvchi/kuzatuvchiga vazifa berilsa
+    # u uni boshlay olmaydi va vazifa "rejada" holatida qotib qoladi
+    users = [x for x in await api.users(u["id"], project_id=d.get("project_id")) if _can_do(x)]
     users = [x for x in users if x["id"] != u["id"]] or users
     await state.update_data(_users=[{"id": x["id"], "name": x["full_name"]} for x in users])
     await state.set_state(NewTask.assignee)
@@ -753,6 +833,7 @@ async def nt_assignee(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
         users = await api.users(u["id"])
         name = next((x["full_name"] for x in users if x["id"] == aid), "?")
     await state.update_data(assignee_id=aid, assignee_name=name, assignee_candidates=[])
+    await _apply_default_reviewer(state, u)
     await cb.answer()
     if d.get("title"):
         return await show_confirm(cb, state, u["id"], lang, edit=True)
@@ -767,6 +848,43 @@ async def nt_pick_candidate(cb: CallbackQuery, state: FSMContext, u: dict, lang:
     d = await state.get_data()
     c = next((c for c in d.get("assignee_candidates", []) if c["id"] == aid), None)
     await state.update_data(assignee_id=aid, assignee_name=c["full_name"] if c else None, assignee_candidates=[])
+    await _apply_default_reviewer(state, u)
+    await cb.answer()
+    await show_confirm(cb, state, u["id"], lang, edit=True)
+
+
+async def ask_reviewer(msg: Message, state: FSMContext, u: dict, lang: str, edit_msg=False):
+    d = await state.get_data()
+    users = await api.users(u["id"], project_id=d.get("project_id"))
+    # faqat "tasks.accept" huquqi bor odam - aks holda vazifa tekshiruvda osilib qoladi
+    users = [x for x in users if x["id"] != d.get("assignee_id") and _can_accept(x)]
+    await state.update_data(_revs=[{"id": x["id"], "name": f"{x['full_name']} · {(x.get('role') or {}).get('name','')}"} for x in users])
+    await state.set_state(NewTask.reviewer)
+    kb = list_kb([{"id": x["id"], "name": x["full_name"]} for x in users], "ntr")
+    if edit_msg:
+        try:
+            return await msg.edit_text(t(lang, "nt_reviewer"), reply_markup=kb)
+        except TelegramBadRequest:
+            pass
+    await msg.answer(t(lang, "nt_reviewer"), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("ntr_pg:"))
+async def ntr_page(cb: CallbackQuery, state: FSMContext, lang: str):
+    d = await state.get_data()
+    await cb.message.edit_reply_markup(reply_markup=list_kb(d.get("_revs", []), "ntr", page=int(cb.data.split(":")[1])))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("ntr:"))
+async def nt_reviewer(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
+    rid = int(cb.data.split(":")[1])
+    d = await state.get_data()
+    name = next((x["name"].split(" · ")[0] for x in d.get("_revs", []) if x["id"] == rid), None)
+    if not name:
+        users = await api.users(u["id"])
+        name = next((x["full_name"] for x in users if x["id"] == rid), None)
+    await state.update_data(reviewer_id=rid, reviewer_name=name, _editing=False)
     await cb.answer()
     await show_confirm(cb, state, u["id"], lang, edit=True)
 
@@ -902,6 +1020,8 @@ async def nt_edit_field(cb: CallbackQuery, state: FSMContext, u: dict, lang: str
         await cb.message.answer(t(lang, "e_desc_ask"), reply_markup=cancel_kb(lang))
     elif field == "assignee":
         await ask_assignee(cb.message, state, u, lang, edit_msg=True)
+    elif field == "reviewer":
+        await ask_reviewer(cb.message, state, u, lang, edit_msg=True)
     elif field == "deadline":
         await state.set_state(NewTask.deadline)
         await cb.message.edit_text(t(lang, "nt_deadline"), reply_markup=deadline_kb(lang))
@@ -970,14 +1090,14 @@ async def nt_type(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
 @router.message(NewTask.edit_title, F.text)
 async def nt_edit_title(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.update_data(title=msg.text.strip()[:250], _editing=False)
-    await msg.answer("✏️", reply_markup=main_menu(lang, perms_of(u)))
+    await msg.answer("✏️", reply_markup=main_menu(lang, perms_of(u), role_of(u)))
     await show_confirm(msg, state, u["id"], lang)
 
 
 @router.message(NewTask.edit_desc, F.text)
 async def nt_edit_desc(msg: Message, state: FSMContext, u: dict, lang: str):
     await state.update_data(description=msg.text.strip()[:2000], _editing=False)
-    await msg.answer("✏️", reply_markup=main_menu(lang, perms_of(u)))
+    await msg.answer("✏️", reply_markup=main_menu(lang, perms_of(u), role_of(u)))
     await show_confirm(msg, state, u["id"], lang)
 
 
@@ -1018,6 +1138,7 @@ async def _from_parsed(msg: Message, state: FSMContext, u: dict, lang: str, pars
     await state.set_data(data)
     await _default_type(u["id"], data)
     await state.update_data(type_id=data.get("type_id"), type_name=data.get("type_name"))
+    await _apply_default_reviewer(state, u)
     await show_confirm(msg, state, u["id"], lang)
 
 
@@ -1076,7 +1197,7 @@ async def free_text(msg: Message, state: FSMContext, u: dict | None, lang: str):
             return await err(msg, lang, e)
         await wait.delete()
         return await _from_parsed(msg, state, u, lang, parsed)
-    await msg.answer(t(lang, "menu"), reply_markup=main_menu(lang, perms_of(u)))
+    await msg.answer(t(lang, "menu"), reply_markup=main_menu(lang, perms_of(u), role_of(u)))
 
 
 # ============ outbox worker (notifications) ============
@@ -1187,6 +1308,14 @@ async def main():
     dp = Dispatcher(storage=storage)
     dp.update.outer_middleware(UserMiddleware())
     dp.include_router(router)
+
+    try:
+        who = await bot.me()
+        if who.username:
+            await api.register_username(who.username)
+            log.info("bot username: @%s", who.username)
+    except Exception as e:
+        log.warning("username ro'yxatdan o'tmadi: %s", e)
 
     from aiogram.types import BotCommand
     await bot.set_my_commands([BotCommand(command="vazifalarim", description="Vazifalarim / Мои задачи"),

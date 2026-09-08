@@ -8,6 +8,16 @@ ALL_PERMS = [
     "admin.users", "admin.roles", "admin.projects", "admin.task_types", "admin.templates", "admin.bot",
 ]
 
+# UI da ruxsatlarni guruhlab ko'rsatish uchun (Administratsiya -> Rollar)
+PERM_GROUPS = [
+    ("tasks", ["tasks.read", "tasks.create", "tasks.edit", "tasks.delete", "tasks.assign", "tasks.change_dates",
+               "tasks.bulk_create", "tasks.export"]),
+    ("flow", ["tasks.start", "tasks.submit_review", "tasks.accept", "tasks.return", "tasks.block", "tasks.reopen"]),
+    ("content", ["checklist.edit", "progress.create", "attachments.upload", "attachments.delete", "comments.create"]),
+    ("reports", ["reports.read"]),
+    ("admin", ["admin.users", "admin.roles", "admin.projects", "admin.task_types", "admin.templates", "admin.bot"]),
+]
+
 ADMIN = [p for p in ALL_PERMS]
 RAHBAR = [
     "tasks.read", "tasks.create", "tasks.edit", "tasks.delete", "tasks.assign", "tasks.change_dates",

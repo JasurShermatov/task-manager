@@ -57,6 +57,9 @@ class Api:
     async def outbox_ack(self, sent: list, failed: list):
         return await self._req("POST", "/telegram/outbox/ack", json={"sent": sent, "failed": failed})
 
+    async def register_username(self, username: str) -> dict:
+        return await self._req("POST", "/telegram/register-username", json={"username": username})
+
     async def sign_file(self, att_id: int) -> dict:
         return await self._req("GET", f"/files/{att_id}/sign")
 

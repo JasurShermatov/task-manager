@@ -34,6 +34,13 @@ def init_db():
     if engine.dialect.name == "postgresql":
         with engine.begin() as c:
             c.execute(text("CREATE SEQUENCE IF NOT EXISTS task_code_seq START 1000"))
+            # Baza tashqaridan to'ldirilgan bo'lishi mumkin (fake_data, import, zaxiradan tiklash) -
+            # ketma-ketlik ma'lumotdan orqada qolsa yangi vazifa kodi to'qnashadi. Har ko'tarilishda
+            # uni eng katta mavjud koddan keyinga surib qo'yamiz.
+            c.execute(text(
+                "SELECT setval('task_code_seq', GREATEST(1000, COALESCE("
+                "(SELECT MAX(CAST(SUBSTRING(code FROM 3) AS BIGINT)) FROM tasks "
+                " WHERE code ~ '^V-[0-9]+$'), 0)))"))
     db = SessionLocal()
     try:
         seed(db)

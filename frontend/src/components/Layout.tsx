@@ -39,13 +39,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {(can('admin.projects') || can('tasks.create')) && <Item to="/projects" title={t('nav_projects')} sub={t('sub_projects')} />}
           {can('admin.templates') && <Item to="/settings/templates" title={t('nav_templates')} sub={t('sub_templates')} />}
           {can('admin.task_types') && <Item to="/settings/types" title={t('nav_types')} sub={t('sub_types')} />}
-          {can('admin.users') && <Item to="/settings/users" title={t('nav_users')} sub={t('sub_users')} />}
           <Item to="/settings/telegram" title={t('nav_telegram')} sub={t('sub_telegram')} />
           <Item to="/settings/profile" title={t('nav_profile')} sub={t('sub_profile')} />
+          {(can('admin.users') || can('admin.roles') || can('admin.bot')) && <>
+            <div className="sgrp">{t('grp_admin')}</div>
+            {can('admin.users') && <Item to="/staff" title={t('nav_staff')} sub={t('sub_staff')} />}
+            <Item to="/admin" title={t('nav_admin')} sub={t('sub_admin')} />
+          </>}
         </nav>
         <div className="side__foot">
           <div className="side__user">{u.full_name}<span>{u.role?.name} · {u.login}</span></div>
-          <div className="seg">
+          <div className="seg seg--full">
             {(['uz', 'ru', 'en'] as Lang[]).map(x => <button key={x} className={lang === x ? 'on' : ''} onClick={e => { e.stopPropagation(); changeLang(x) }}>{x === 'uz' ? "O'zbekcha" : x === 'ru' ? 'Русский' : 'English'}</button>)}
           </div>
           <button className="btn-ghost-dark" onClick={logout}>{t('logout')}</button>

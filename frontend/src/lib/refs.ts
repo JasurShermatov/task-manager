@@ -2,7 +2,7 @@ import { useFetch } from './hooks'
 
 export type Project = { id: number; code: string; name: string; is_active: boolean }
 export type Location = { id: number; project_id: number; parent_id: number | null; name: string; kind: string; sort_order: number }
-export type User = { id: number; full_name: string; login: string; role: { code: string; name: string }; scope_type: string; scope_id: number | null; is_active: boolean; telegram_user_id?: number | null; lang?: string; phone?: string | null }
+export type User = { id: number; full_name: string; login: string; role: { code: string; name: string; permissions_json?: string[] }; scope_type: string; scope_id: number | null; is_active: boolean; telegram_user_id?: number | null; lang?: string; phone?: string | null }
 export type TaskType = { id: number; name: string; group_name: string | null; default_duration_days: number; required_evidence_kinds: string[]; default_checklist_json: any[]; is_active: boolean }
 
 export function useRefs(projectId?: number | null) {

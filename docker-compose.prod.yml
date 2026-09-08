@@ -1,0 +1,87 @@
+# SAFF Vazifalar nazorati — PRODUCTION
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Tashqariga faqat 80-port chiqadi. Postgres, Redis va API server ichida qoladi -
+# ularga internetdan kirib bo'lmaydi.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # ma'lumot yo'qolmasligi uchun
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    # DIQQAT: ports yo'q - baza tashqariga ochilmaydi
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build: ./backend
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /data/uploads
+      # imzolangan fayl havolalari shu manzil bilan quriladi (nginx orqali)
+      PUBLIC_API_URL: ${PUBLIC_URL}/api
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    # DIQQAT: ports yo'q - API ga faqat nginx orqali kiriladi
+
+  bot:
+    build: ./bot
+    restart: always
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+      REDIS_URL: redis://redis:6379/1
+      WEB_URL: ${PUBLIC_URL}
+    depends_on:
+      api: { condition: service_healthy }
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: /api
+    restart: always
+    depends_on:
+      - api
+    ports:
+      - "80:80"          # domen ulangandan keyin bu yerga "443:443" ham qo'shiladi
+
+volumes:
+  pgdata:
+  redisdata:
+  uploads:

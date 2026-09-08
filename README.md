@@ -133,4 +133,3 @@ frontend/src/      React: Kanban, jadval, vazifa paneli, hisobot, sozlamalar
 - Har bir muhim amal `task_history` ga yoziladi: kim, eski/yangi qiymat, **manba** (web/bot) va `request_id`.
 - Fayllar diskda (`uploads` volume), bazada emas. Havolalar imzolangan va 5 daqiqa amal qiladi.
 - Zaxira: `pg_dump` ni kunlik cron ga qo'ying va oyiga bir marta tiklashni sinab ko'ring.
-# task-manager

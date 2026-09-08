@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select, or_, and_, func, desc, asc
 from sqlalchemy.orm import Session
 
-from ..auth import Ctx, get_ctx, check_task_scope, check_project_scope, location_in_scope
+from ..auth import Ctx, get_ctx, check_task_scope, check_project_scope, location_in_scope, scope_project_id
 from ..config import settings
 from ..db import get_db
 from ..errors import ApiError, validation, version_conflict, not_found, permission_denied, unauthorized
@@ -38,9 +38,12 @@ def scope_filter(ctx: Ctx, db: Session, q):
     if u.scope_type == "project":
         return q.where(Task.project_id == u.scope_id)
     if u.scope_type == "location":
-        # all locations under scope
+        # o'z blokidagi hamma joy + loyihaning joysiz (umumiy) vazifalari + o'ziga tegishlilari
         ids = descendant_location_ids(db, u.scope_id)
-        return q.where(or_(Task.location_id.in_(ids), Task.assignee_id == u.id, Task.reviewer_id == u.id))
+        pid = scope_project_id(db, u)
+        return q.where(or_(Task.location_id.in_(ids),
+                           and_(Task.location_id.is_(None), Task.project_id == pid),
+                           Task.assignee_id == u.id, Task.reviewer_id == u.id))
     return q.where(False)
 
 
@@ -115,6 +118,16 @@ def _validate_people(db: Session, assignee_id: int, reviewer_id: int):
         fe["reviewer_id"] = "not_found"
     if fe:
         raise validation("VALIDATION", "Bajaruvchi yoki tekshiruvchi topilmadi.", field_errors=fe)
+    if "tasks.start" not in (a.role.permissions_json or []):
+        # aks holda vazifa "rejada" holatida qotib qoladi - tayinlangan odam uni boshlay olmaydi
+        # (masalan tekshiruvchi yoki kuzatuvchi bajaruvchi qilib tanlansa)
+        raise validation("VALIDATION", "Bu odam vazifani bajara olmaydi (ish boshlash huquqi yo'q).",
+                         field_errors={"assignee_id": "cannot_execute"})
+    if "tasks.accept" not in (r.role.permissions_json or []):
+        # aks holda vazifa "tekshiruvda" holatida abadiy osilib qoladi - tayinlangan odam uni
+        # hech qachon qabul qila olmaydi (masalan prorab yoki ishchi tekshiruvchi qilib tanlansa)
+        raise validation("VALIDATION", "Bu odam vazifani qabul qila olmaydi (tekshiruvchi huquqi yo'q).",
+                         field_errors={"reviewer_id": "cannot_accept"})
     return a, r
 
 

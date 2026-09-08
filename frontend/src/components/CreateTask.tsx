@@ -14,7 +14,7 @@ export default function CreateTask({ onClose, onCreated, defaults }: {
 }) {
   const { t, lang } = useT()
   const { toastErr } = useToast()
-  const { me } = useAuth()
+  const { me, can } = useAuth()
   const [projectId, setProjectId] = useState<number | ''>(defaults?.project_id ?? '')
   const { projects, users, types, locations } = useRefs(projectId || null)
   const { data: templates } = useFetch<any[]>('/task-templates')
@@ -29,7 +29,21 @@ export default function CreateTask({ onClose, onCreated, defaults }: {
   const [voiceInfo, setVoiceInfo] = useState<string>('')
   const [cands, setCands] = useState<any[]>([])
 
+  const canAccept = (u: any) => !!u?.role?.permissions_json?.includes('tasks.accept')
+  const canDo = (u: any) => !!u?.role?.permissions_json?.includes('tasks.start')
+  const reviewerOptions = users.filter(u => canAccept(u) || u.id === f.reviewer_id)
+  const assigneeOptions = users.filter(u => canDo(u) || u.id === f.assignee_id)
   useEffect(() => { if (projects.length === 1 && !projectId) setProjectId(projects[0].id) }, [projects])
+  // kim tekshiradi: loyihaning tekshiruvchisi -> rahbari -> "tasks.accept" huquqi bor boshqa odam -> o'zim
+  // (faqat qabul qilish huquqi bo'lgan odamgina tayinlanadi - aks holda vazifa tekshiruvda osilib qoladi)
+  useEffect(() => {
+    if (!projectId || !users.length) return
+    const pick = users.find(u => u.role?.code === 'tekshiruvchi' && u.id !== me?.user.id)
+      || users.find(u => u.role?.code === 'rahbar' && u.id !== me?.user.id)
+      || users.find(u => canAccept(u) && u.id !== me?.user.id)
+    const self = can('tasks.accept') ? me?.user.id : undefined
+    setF((s: any) => (s.reviewer_id && s.reviewer_id !== me?.user.id) ? s : { ...s, reviewer_id: pick?.id ?? self ?? '' })
+  }, [projectId, users.length])
   useEffect(() => {
     if (!f.type_id && types.length) applyType(types[0].id)
   }, [types])
@@ -142,12 +156,12 @@ export default function CreateTask({ onClose, onCreated, defaults }: {
       <label className="lbl">{t('cr_assignee')} <i>*</i>
         <select className="sel" value={f.assignee_id} onChange={e => setF({ ...f, assignee_id: Number(e.target.value) })}>
           <option value="">—</option>
-          {users.map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}
+          {assigneeOptions.map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}
         </select></label>
       <label className="lbl">{t('cr_reviewer')} <i>*</i>
         <select className="sel" value={f.reviewer_id} onChange={e => setF({ ...f, reviewer_id: Number(e.target.value) })}>
           <option value="">—</option>
-          {users.map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}
+          {reviewerOptions.map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}
         </select>
         {f.assignee_id && f.assignee_id === f.reviewer_id && <span className="field-err">{t('cr_self_review')}</span>}</label>
       <label className="lbl">{t('cr_start')} <i>*</i>

@@ -126,6 +126,16 @@ def location_in_scope(db: Session, location_id: Optional[int], scope_loc_id: int
     return False
 
 
+def scope_project_id(db: Session, u: User) -> Optional[int]:
+    """Foydalanuvchi doirasi qaysi loyihaga tegishli (uchastka bo'lsa - blokning loyihasi)."""
+    if u.scope_type == "project":
+        return u.scope_id
+    if u.scope_type == "location":
+        loc = db.get(Location, u.scope_id)
+        return loc.project_id if loc else None
+    return None
+
+
 def user_in_project(u: User, project_id: int, db: Session) -> bool:
     if u.scope_type == "system":
         return True
@@ -151,11 +161,14 @@ def check_task_scope(ctx: Ctx, task: Task, db: Session):
             raise scope_forbidden()
         return
     if u.scope_type == "location":
-        if not location_in_scope(db, task.location_id, u.scope_id):
-            # a prorab may still see tasks assigned to himself
-            if task.assignee_id != u.id and task.reviewer_id != u.id:
-                raise scope_forbidden()
-        return
+        if location_in_scope(db, task.location_id, u.scope_id):
+            return
+        # joy ko'rsatilmagan (butun obyekt bo'yicha) vazifa ham uchastka boshlig'iga tegishli
+        if task.location_id is None and scope_project_id(db, u) == task.project_id:
+            return
+        if task.assignee_id == u.id or task.reviewer_id == u.id:
+            return
+        raise scope_forbidden()
     raise scope_forbidden()
 
 
@@ -168,7 +181,9 @@ def check_project_scope(ctx: Ctx, project_id: int, location_id: Optional[int], d
             raise scope_forbidden()
         return
     if u.scope_type == "location":
-        if not location_id or not location_in_scope(db, location_id, u.scope_id):
-            raise scope_forbidden()
-        return
+        if location_id and location_in_scope(db, location_id, u.scope_id):
+            return
+        if location_id is None and scope_project_id(db, u) == project_id:
+            return
+        raise scope_forbidden()
     raise scope_forbidden()

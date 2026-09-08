@@ -10,7 +10,7 @@ from ..auth import Ctx, get_ctx, hash_password, validate_password_strength, user
 from ..db import get_db
 from ..errors import validation, not_found, permission_denied
 from ..models import Project, Location, TaskType, User, Role, Task, TaskHistory
-from ..permissions import ALL_PERMS
+from ..permissions import ALL_PERMS, PERM_GROUPS
 from ..schemas import (ProjectOut, ProjectIn, LocationOut, LocationIn, TaskTypeOut, TaskTypeIn, UserOut, UserCreate,
                        UserPatch, RoleOut, RoleIn, UserBrief)
 from ..services import tasks as svc
@@ -30,7 +30,33 @@ def projects(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db), include
     if not include_inactive:
         q = q.where(Project.is_active == True)  # noqa
     rows = db.scalars(q).all()
-    return [p for p in rows if user_in_project(ctx.user, p.id, db)]
+    rows = [p for p in rows if user_in_project(ctx.user, p.id, db)]
+    if ctx.user.role.code == "bajaruvchi":
+        # bajaruvchi doirasi - o'ziga biriktirilgan ish, shuning uchun faqat o'zi ishlaydigan obyektlar
+        mine = set(db.scalars(select(Task.project_id).where(
+            or_(Task.assignee_id == ctx.user.id, Task.reviewer_id == ctx.user.id), Task.is_active == True)))  # noqa
+        rows = [p for p in rows if p.id in mine]
+    return rows
+
+
+@router.get("/projects/stats")
+def project_stats(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    """Har loyiha bo'yicha qisqa raqamlar (ro'yxatda ko'rsatish uchun)."""
+    from datetime import date as _date
+    from .tasks import scope_filter
+    today = _date.today()
+    q = scope_filter(ctx, db, select(Task).where(Task.is_active == True))  # noqa
+    out: dict[int, dict] = {}
+    for t in db.scalars(q):
+        row = out.setdefault(t.project_id, {"total": 0, "open": 0, "overdue": 0, "done": 0})
+        row["total"] += 1
+        if t.status in ("plan", "progress", "review", "blocked"):
+            row["open"] += 1
+            if t.planned_end < today:
+                row["overdue"] += 1
+        elif t.status == "done":
+            row["done"] += 1
+    return out
 
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
@@ -128,6 +154,12 @@ def roles(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
 @router.get("/roles/permissions", response_model=List[str])
 def perm_catalog(ctx: Ctx = Depends(get_ctx)):
     return ALL_PERMS
+
+
+@router.get("/roles/permission-groups")
+def perm_groups(ctx: Ctx = Depends(get_ctx)):
+    """UI ruxsatlarni guruhlab ko'rsatishi uchun."""
+    return [{"group": g, "permissions": items} for g, items in PERM_GROUPS]
 
 
 @router.patch("/roles/{rid}", response_model=RoleOut)

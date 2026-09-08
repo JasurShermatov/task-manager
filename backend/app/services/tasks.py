@@ -30,14 +30,46 @@ def utcnow():
 
 
 # ---------- helpers ----------
+def code_taken(db: Session, n) -> bool:
+    return bool(db.execute(select(func.count()).select_from(Task).where(Task.code == f"V-{n}")).scalar())
+
+
+def max_code_num(db: Session) -> int:
+    """Mavjud eng katta V-<raqam> kodi (0 - hech narsa yo'q)."""
+    if db.bind.dialect.name == "postgresql":
+        return int(db.execute(text(
+            "SELECT COALESCE(MAX(CAST(SUBSTRING(code FROM 3) AS BIGINT)), 0) "
+            "FROM tasks WHERE code ~ '^V-[0-9]+$'")).scalar() or 0)
+    best = 0
+    for (c,) in db.execute(select(Task.code)):
+        if c and c.startswith("V-") and c[2:].isdigit():
+            best = max(best, int(c[2:]))
+    return best
+
+
+def sync_code_sequence(db: Session) -> int:
+    """Postgres ketma-ketligini bazadagi eng katta koddan keyinga suradi.
+    Baza tashqaridan to'ldirilganda (fake_data, import, zaxiradan tiklash) ketma-ketlik
+    ma'lumotdan orqada qoladi va yangi vazifa yaratishda kod to'qnashadi -> 500."""
+    if db.bind.dialect.name != "postgresql":
+        return 0
+    top = max(1000, max_code_num(db))
+    db.execute(text("SELECT setval('task_code_seq', :v)"), {"v": top})
+    return top
+
+
 def next_code(db: Session) -> str:
     """Server-side task code. Postgres uses a sequence (safe under concurrency);
-    other dialects (tests) fall back to max(id)."""
+    other dialects (tests) fall back to max(id). Ketma-ketlik ma'lumotdan orqada qolib
+    qolgan bo'lsa - o'zi tuzatib oladi."""
     if db.bind.dialect.name == "postgresql":
         n = db.execute(text("SELECT nextval('task_code_seq')")).scalar()
+        if code_taken(db, n):
+            sync_code_sequence(db)
+            n = db.execute(text("SELECT nextval('task_code_seq')")).scalar()
     else:
         n = 1000 + (db.execute(select(func.max(Task.id))).scalar() or 0) + 1
-        while db.execute(select(func.count()).select_from(Task).where(Task.code == f"V-{n}")).scalar():
+        while code_taken(db, n):
             n += 1
     return f"V-{n}"
 
@@ -278,8 +310,13 @@ def prorab_and_rahbar_ids(db: Session, task: Task) -> set[int]:
             if u.scope_type == "system" or (u.scope_type == "project" and u.scope_id == task.project_id):
                 ids.add(u.id)
         elif code == "prorab":
-            if u.scope_type == "system" or (u.scope_type == "project" and u.scope_id == task.project_id) or \
-               (u.scope_type == "location" and location_in_scope(db, task.location_id, u.scope_id)):
+            from ..auth import scope_project_id
+            in_block = u.scope_type == "location" and location_in_scope(db, task.location_id, u.scope_id)
+            # joysiz (butun obyekt bo'yicha) vazifa - o'sha loyihaning barcha prorablariga tegishli
+            project_wide = (u.scope_type == "location" and task.location_id is None
+                            and scope_project_id(db, u) == task.project_id)
+            if u.scope_type == "system" or (u.scope_type == "project" and u.scope_id == task.project_id) \
+               or in_block or project_wide:
                 ids.add(u.id)
     ids.add(task.created_by)
     return ids

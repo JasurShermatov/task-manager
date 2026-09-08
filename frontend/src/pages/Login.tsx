@@ -25,7 +25,7 @@ export default function Login() {
         <label className="lbl">{t('password')}<input className="inp" type="password" value={p} onChange={e => setP(e.target.value)} autoComplete="current-password" /></label>
         {err && <div className="alert">{err}</div>}
         <button className="btn btn--p" disabled={busy || !l || !p} style={{ justifyContent: 'center' }}>{t('login_btn')}</button>
-        <div className="seg" style={{ alignSelf: 'center', background: '#efeff1' }}>
+        <div className="seg seg--full" style={{ background: '#efeff1' }}>
           {(['uz', 'ru', 'en'] as Lang[]).map(x => <button type="button" key={x} className={lang === x ? 'on' : ''} style={lang === x ? { background: '#0b0b0c', color: '#fff' } : { color: '#6b6b70' }} onClick={() => setLang(x)}>{x === 'uz' ? "O'zbekcha" : x === 'ru' ? 'Русский' : 'English'}</button>)}
         </div>
       </form>

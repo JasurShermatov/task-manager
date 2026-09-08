@@ -269,6 +269,15 @@ class TelegramLinkCode(Base):
     used: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class AppSetting(Base):
+    """Kod tegmasdan o'zgaradigan sozlamalar (masalan bot username)."""
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+    updated_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)

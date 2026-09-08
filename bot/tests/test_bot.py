@@ -153,6 +153,53 @@ def test_pagination_keyboard():
     assert "nta_pg:0" in d2 and "nta_pg:2" in d2
 
 
+@pytest.mark.asyncio
+async def test_pagination_handlers_are_wired_for_every_picker():
+    """list_kb() 8 tadan ko'p element bo'lsa "keyingi sahifa" tugmasini chiqaradi, lekin loyiha
+    (Yangi vazifa) va vazifa tanlash (Kunlik hisobot / Muammo) ro'yxatlari uchun bu tugmani ushlaydigan
+    handler umuman yo'q edi - superadmin 8 tadan ko'p loyihaga ega bo'lganda (demo bazada 12 ta)
+    yoki bir xodimda 8 tadan ko'p vazifa bo'lganda tugma hech narsa qilmas edi."""
+    import main as bot
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
+    from aiogram.fsm.storage.memory import MemoryStorage
+
+    class Sink:
+        def __init__(self):
+            self.markups = []
+
+        async def edit_reply_markup(self, reply_markup=None, **kw):
+            self.markups.append(reply_markup)
+
+    class Cb:
+        def __init__(self, data, message):
+            self.data = data
+            self.message = message
+            self.alerts: list[str] = []
+
+        async def answer(self, text="", show_alert=False):
+            if text:
+                self.alerts.append(text)
+
+    storage = MemoryStorage()
+    st = FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=1, user_id=1))
+    items = [{"id": i, "name": f"Item {i}"} for i in range(12)]
+    for state_key, prefix, handler in (
+        ("_projects", "ntp", bot.ntp_page),
+        ("_rep_items", "rep", bot.rep_page),
+        ("_blk_items", "blkt", bot.blkt_page),
+    ):
+        await st.update_data(**{state_key: items})
+        sink = Sink()
+        cb = Cb(f"{prefix}_pg:1", sink)
+        await handler(cb, st, "uz")
+        assert not cb.alerts
+        assert sink.markups, f"{prefix}_pg: handler ro'yxatdan o'tmagan yoki javob bermadi"
+        datas = [b.callback_data for row in sink.markups[0].inline_keyboard for b in row]
+        assert f"{prefix}:8" in datas, f"{prefix} ikkinchi sahifasi noto'g'ri chiqdi"
+        assert f"{prefix}_pg:0" in datas, "orqaga qaytish tugmasi yo'q"
+
+
 def test_date_parser():
     from main import parse_date
     assert parse_date("25.10.2026") == date(2026, 10, 25)
@@ -281,4 +328,96 @@ async def test_bot_api_error_mapping(live_api):
     with pytest.raises(ApiError) as e:
         await api.task_by_code(1, "V-999999")
     assert e.value.status == 404
+    await api.c.aclose()
+
+
+# ---------------------------------------------------------------- role-aware bot
+ROLE_PERMS = {
+    "admin": {"tasks.read", "tasks.create", "tasks.start", "tasks.submit_review", "tasks.accept", "tasks.return",
+              "tasks.block", "progress.create", "reports.read", "admin.users", "tasks.export"},
+    "rahbar": {"tasks.read", "tasks.create", "tasks.start", "tasks.submit_review", "tasks.accept", "tasks.return",
+               "tasks.block", "progress.create", "reports.read", "tasks.export"},
+    "prorab": {"tasks.read", "tasks.create", "tasks.start", "tasks.submit_review", "tasks.block",
+               "progress.create", "reports.read", "tasks.export"},
+    "bajaruvchi": {"tasks.read", "tasks.start", "tasks.submit_review", "tasks.block", "progress.create",
+                   "checklist.edit", "attachments.upload", "comments.create"},
+    "tekshiruvchi": {"tasks.read", "tasks.accept", "tasks.return", "reports.read", "tasks.export", "comments.create"},
+    "kuzatuvchi": {"tasks.read", "reports.read"},
+}
+
+
+def _menu(role, lang="uz"):
+    kb = render.main_menu(lang, ROLE_PERMS[role], role)
+    return {b.text for row in kb.keyboard for b in row}
+
+
+def test_menu_is_different_for_every_role():
+    m = {r: _menu(r) for r in ROLE_PERMS}
+    # superadmin: kuzatadi va vazifa beradi, lekin o'zi hech qachon ijrochi/tekshiruvchi
+    # bo'lmagani uchun "o'z vazifang" tugmalari (doim bo'sh chiqadigan) ko'rsatilmaydi
+    for key in ("btn_new", "btn_overdue", "btn_blocked", "btn_reports", "btn_team", "btn_search"):
+        assert t("uz", key) in m["admin"], key
+    for key in ("btn_my", "btn_report", "btn_review", "btn_problem"):
+        assert t("uz", key) not in m["admin"], key
+    # rahbar - jamoadan tashqari hammasi
+    assert t("uz", "btn_team") not in m["rahbar"]
+    assert {t("uz", "btn_new"), t("uz", "btn_reports"), t("uz", "btn_review")} <= m["rahbar"]
+    # prorab - vazifa beradi, hisobot ko'radi, lekin qabul qilmaydi va jamoani boshqarmaydi
+    assert t("uz", "btn_new") in m["prorab"] and t("uz", "btn_reports") in m["prorab"]
+    assert t("uz", "btn_review") not in m["prorab"] and t("uz", "btn_team") not in m["prorab"]
+    # ishchi - faqat o'z ishi
+    assert {t("uz", "btn_my"), t("uz", "btn_report"), t("uz", "btn_problem")} <= m["bajaruvchi"]
+    for key in ("btn_new", "btn_review", "btn_reports", "btn_overdue", "btn_blocked", "btn_team"):
+        assert t("uz", key) not in m["bajaruvchi"], key
+    # tekshiruvchi - qabul qiladi, hisobot ko'radi, lekin hisobot topshirmaydi
+    assert t("uz", "btn_review") in m["tekshiruvchi"]
+    assert t("uz", "btn_report") not in m["tekshiruvchi"] and t("uz", "btn_new") not in m["tekshiruvchi"]
+    # kuzatuvchi - faqat ko'radi. "Vazifalarim" ham yo'q: unga hech qachon vazifa biriktirilmaydi
+    # va tekshiruvchi qilib ham tayinlanmaydi, ya'ni bu ro'yxat doim bo'sh chiqar edi
+    assert m["kuzatuvchi"] == {t("uz", k) for k in ("btn_overdue", "btn_blocked", "btn_reports",
+                                                    "btn_search", "btn_lang", "btn_help")}
+    # har rol o'z to'plamiga ega
+    assert len({frozenset(v) for v in m.values()}) == len(m)
+
+
+def test_menu_rows_are_pairs_and_translated():
+    for lang in ("uz", "ru", "en"):
+        for role in ROLE_PERMS:
+            kb = render.main_menu(lang, ROLE_PERMS[role])
+            assert all(len(row) <= 2 for row in kb.keyboard)
+            texts = [b.text for row in kb.keyboard for b in row]
+            assert len(texts) == len(set(texts))
+            assert all(txt.strip() for txt in texts)
+
+
+def test_daily_report_notification_renders():
+    from main import render_notification
+    p = {"code": "V-1042", "title": "Beton ishlari — B blok 8-qavat", "by": "Rustam Ergashev",
+         "date": "2026-09-07", "quantity": 42.0, "unit": "m3", "workers": 9,
+         "note": "Yomg'ir tufayli sekinlashdi", "total": 156.0, "plan": 240.0, "duplicate": False}
+    for lang in ("uz", "ru", "en"):
+        out = render_notification(lang, "daily_report", p)
+        assert "V-1042" in out and "Rustam Ergashev" in out
+        assert "42" in out and "m3" in out and "9" in out
+        assert "156" in out and "240" in out
+        assert "{" not in out and "42.0" not in out       # raqamlar toza ko'rinadi
+    dup = render_notification("uz", "daily_report", {**p, "duplicate": True, "note": ""})
+    assert "⚠️" in dup
+
+
+def test_number_formatting():
+    from main import _num
+    assert _num(12.0) == "12" and _num(12.5) == "12.5" and _num(0) == "0"
+    assert _num(None) == "None" or _num(None) == "none"
+
+
+@pytest.mark.asyncio
+async def test_manager_summary_endpoint_used_by_bot(live_api):
+    from api import api
+    import httpx
+    base, _ = live_api
+    api.c = httpx.AsyncClient(base_url=base, timeout=30)
+    s = await api.summary(1)
+    assert "kpi" in s and "blocked_reasons" in s and "staff" in s
+    assert set(s["kpi"]) >= {"open", "overdue", "blocked", "review", "review_oldest_days", "on_time_pct", "return_pct", "total"}
     await api.c.aclose()

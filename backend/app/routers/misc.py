@@ -13,7 +13,7 @@ from ..auth import Ctx, get_ctx, get_service
 from ..config import settings
 from ..db import get_db
 from ..errors import validation, not_found, unauthorized, ApiError
-from ..models import TelegramLinkCode, User, Notification, TaskAttachment, Task
+from ..models import TelegramLinkCode, User, Notification, TaskAttachment, Task, AppSetting
 from ..schemas import LinkCodeOut, NotificationOut, UserOut
 from ..services import files as fsvc
 from ..services import tasks as svc
@@ -73,6 +73,21 @@ def user_by_tg(tg_id: int, db: Session = Depends(get_db)):
     if not u:
         raise not_found("Foydalanuvchi")
     return u
+
+
+@router.post("/telegram/register-username", dependencies=[Depends(get_service)])
+def register_bot_username(body: dict, db: Session = Depends(get_db)):
+    """Bot ishga tushganda o'z username'ini xabar qiladi - qo'lda kiritish shart emas."""
+    val = str(body.get("username") or "").strip().lstrip("@")
+    if not val:
+        raise validation("VALIDATION", "username bo'sh.")
+    row = db.get(AppSetting, "bot_username")
+    if row:
+        row.value = val
+    else:
+        db.add(AppSetting(key="bot_username", value=val))
+    db.commit()
+    return {"bot_username": val}
 
 
 @router.get("/telegram/outbox", dependencies=[Depends(get_service)])
@@ -150,6 +165,46 @@ def get_file(att_id: int, exp: int, sig: str, db: Session = Depends(get_db)):
 def sign_file(att_id: int, db: Session = Depends(get_db)):
     att = db.get(TaskAttachment, att_id) or (_ for _ in ()).throw(not_found("Fayl"))
     return {"url": fsvc.signed_url(att.id, 900), "path": fsvc.abs_path(att.storage_key)}
+
+
+# ---------- app settings (bot username va h.k.) ----------
+PUBLIC_SETTINGS = {"bot_username"}
+
+
+def get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.get(AppSetting, key)
+    return (row.value if row and row.value else default) or default
+
+
+@router.get("/settings")
+def settings_read(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    """Hamma ko'radigan sozlamalar (bot manzili kabi)."""
+    rows = {r.key: r.value for r in db.scalars(select(AppSetting))}
+    out = {k: rows.get(k, "") for k in PUBLIC_SETTINGS}
+    out["bot_username"] = (out.get("bot_username") or "").lstrip("@")
+    out["bot_url"] = f"https://t.me/{out['bot_username']}" if out["bot_username"] else ""
+    return out
+
+
+@router.patch("/settings")
+def settings_write(body: dict, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    ctx.require("admin.bot")
+    for key, value in body.items():
+        if key not in PUBLIC_SETTINGS:
+            raise validation("VALIDATION", f"Noma'lum sozlama: {key}")
+        val = (str(value or "")).strip().lstrip("@")
+        if key == "bot_username" and val:
+            import re as _re
+            if not _re.fullmatch(r"[A-Za-z0-9_]{4,32}", val):
+                raise validation("VALIDATION", "Bot username 4-32 belgi: harf, raqam va _ dan iborat.",
+                                 field_errors={"bot_username": "invalid"})
+        row = db.get(AppSetting, key)
+        if row:
+            row.value, row.updated_by = val, ctx.user.id
+        else:
+            db.add(AppSetting(key=key, value=val, updated_by=ctx.user.id))
+    db.commit()
+    return settings_read(ctx, db)
 
 
 @router.get("/health")

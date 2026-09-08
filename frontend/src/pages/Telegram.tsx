@@ -3,12 +3,16 @@ import { api, del, post } from '../lib/api'
 import { useT, fmtDateTime } from '../lib/i18n'
 import { useToast } from '../lib/toast'
 import { useAuth } from '../lib/auth'
+import { useFetch } from '../lib/hooks'
 import { PageHeader } from '../components/Layout'
 
 export default function Telegram() {
   const { t, lang } = useT()
   const { me, reload } = useAuth()
   const { toastErr } = useToast()
+  const { data: cfg } = useFetch<any>('/settings')
+  const botUrl = cfg?.bot_url || ''
+  const botName = cfg?.bot_username || ''
   const [code, setCode] = useState<{ code: string; expires_at: string } | null>(null)
   const [left, setLeft] = useState(0)
   const u = me!.user
@@ -36,9 +40,18 @@ export default function Telegram() {
 
   return (
     <>
-      <PageHeader title={t('tg_title')} />
+      <PageHeader title={t('tg_title')}>
+        {botUrl && <a className="btn btn--sm btn--tg" href={botUrl} target="_blank" rel="noreferrer">✈ {t('ad_bot_open')}</a>}
+      </PageHeader>
       <div className="content" style={{ maxWidth: 620 }}>
         <p className="muted">{t('tg_desc')}</p>
+        {botUrl && (
+          <a className="botlink" href={botUrl} target="_blank" rel="noreferrer">
+            <span className="botlink__ic">✈</span>
+            <span className="botlink__t"><b>{t('ad_bot_open')}</b><span className="mono">@{botName}</span></span>
+            <span className="botlink__go">→</span>
+          </a>
+        )}
         {u.telegram_user_id ? (
           <div className="blk">
             <div className="row"><span className="pill pill--t">✈ {t('tg_linked')}</span>
@@ -54,6 +67,7 @@ export default function Telegram() {
               <div>
                 <div className="mono" style={{ fontSize: 40, fontWeight: 700, letterSpacing: '.15em' }}>{code.code}</div>
                 <div className="small muted">{t('tg_code_hint')} · {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</div>
+                {botUrl && <a className="btn btn--sm btn--tg" style={{ marginTop: 10, marginRight: 8 }} href={botUrl} target="_blank" rel="noreferrer">✈ {t('ad_bot_open')}</a>}
                 <button className="btn btn--sm" style={{ marginTop: 10 }} onClick={getCode}>↻</button>
               </div>
             )}

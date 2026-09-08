@@ -1,9 +1,16 @@
-"""Demo ma'lumot generatori — real qurilish jarayoniga o'xshash baza.
+"""FAKER — sinov uchun soxta ma'lumot generatori. Prodda ishlatilmaydi.
 
-Ishga tushirish:
-    docker compose exec api python -m app.demo_data          # to'ldiradi (baza bo'sh bo'lsa)
-    docker compose exec api python -m app.demo_data --force  # vazifalar bor bo'lsa ham qo'shadi
-    docker compose exec api python -m app.demo_data --reset  # demo ma'lumotni tozalab qaytadan yaratadi
+Bitta buyruq bilan bazaga (Postgres yoki SQLite) to'liq, real qurilishga o'xshash
+ma'lumot yozadi: loyihalar, blok/qavat/zona daraxti, xodimlar, shablonlar, vazifalar,
+checklist, bog'liqliklar, kunlik hisobotlar, fotolar, izohlar, tarix, bildirishnomalar
+va takroriy vazifa qoidalari — ya'ni barcha jadvallar.
+
+    docker compose -f docker-compose.prod.yml exec api python -m app.fake_data          # to'ldiradi
+    docker compose -f docker-compose.prod.yml exec api python -m app.fake_data --reset  # tozalab qaytadan
+    docker compose -f docker-compose.prod.yml exec api python -m app.fake_data --wipe   # FAQAT tozalaydi
+
+--wipe soxta ma'lumotni bazadan olib tashlaydi: admin foydalanuvchi, rollar va ish
+turlari joyida qoladi, ya'ni tizim toza holatda ishlayveradi.
 
 Mantiq qurilishdagidek: har blokda pastki qavatlar bitgan, o'rtasi jarayonda,
 yuqorisi rejada. Ish turlari zanjir bo'lib boradi (armatura -> beton -> devor -> ...),
@@ -27,6 +34,7 @@ from .models import (Project, Location, Role, User, TaskType, TaskTemplate, Task
                      TaskDependency, TaskDailyProgress, TaskAttachment, TaskComment, TaskHistory,
                      Notification, TaskRecurringRule, Job, TelegramLinkCode, RefreshToken)
 from .services import files as fsvc
+from .services import tasks as svc
 from .seed import seed
 
 R = random.Random(20260907)
@@ -66,7 +74,7 @@ STAFF = {
                      ("Oybek Salimov", "osalimov")],
     "kuzatuvchi": [("Malika Ahmedova", "mahmedova"), ("Nigora Yusupova", "nyusupova")],
 }
-DEMO_PASSWORD = "1234"
+FAKE_PASSWORD = "1234"
 
 # qurilish ketma-ketligi: (ish turi nomi, kunlar, hajm, birlik)
 SEQUENCE = [
@@ -101,7 +109,7 @@ DAILY_NOTES = ["Reja bo'yicha ketyapti", "Yomg'ir tufayli sekinlashdi", "Qo'shim
 
 
 def png(w=320, h=240, rgb=(120, 130, 140)) -> bytes:
-    """Kichik haqiqiy PNG (kutubxonasiz) — demo fotolar uchun."""
+    """Kichik haqiqiy PNG (kutubxonasiz) — soxta fotolar uchun."""
     raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
 
     def chunk(tag, data):
@@ -115,7 +123,7 @@ def png(w=320, h=240, rgb=(120, 130, 140)) -> bytes:
 
 
 def wipe(db):
-    """Demo ma'lumotni tozalaydi (foydalanuvchi va rollar qoladi)."""
+    """Soxta ma'lumotni tozalaydi (admin, rollar va ish turlari qoladi)."""
     for model in (TaskHistory, TaskComment, TaskAttachment, TaskDailyProgress, TaskChecklistItem,
                   TaskDependency, Notification, Job, TaskRecurringRule, Task, TaskTemplate,
                   TelegramLinkCode, RefreshToken):
@@ -160,7 +168,16 @@ def build(db, reset=False):
                             db.add(Location(project_id=p.id, parent_id=f.id, name=f"Zona {z}", kind="zone", sort_order=z))
         projects.append(p)
     db.flush()
-    # demo loyihaning bittasi arxivda bo'lsin (real hayotda tugagan obyekt)
+    # seed'dagi bo'sh namuna loyiha soxta ma'lumot bilan aralashmasin
+    stub = db.scalar(select(Project).where(Project.code == "SAFF-01"))
+    if stub and not db.scalar(select(Task).where(Task.project_id == stub.id).limit(1)):
+        db.execute(delete(TaskTemplate).where(TaskTemplate.id.in_(
+            select(TaskTemplate.id).where(TaskTemplate.name == "Monolit plita — qavat"))))
+        db.execute(delete(Location).where(Location.project_id == stub.id))
+        db.delete(stub)
+        db.flush()
+        projects = [x for x in projects if x.id != stub.id]
+    # bitta obyekt arxivda bo'lsin (real hayotda tugagan obyekt)
     projects[-1].is_active = False
     db.flush()
     active_projects = [p for p in projects if p.is_active]
@@ -170,7 +187,7 @@ def build(db, reset=False):
         u = db.scalar(select(User).where(User.login == login))
         if u:
             return u
-        u = User(full_name=name, login=login, password_hash=hash_password(DEMO_PASSWORD),
+        u = User(full_name=name, login=login, password_hash=hash_password(FAKE_PASSWORD),
                  role_id=roles[role].id, scope_type=scope_type, scope_id=scope_id, lang=lang,
                  phone=f"+9989{R.randint(10, 99)}{R.randint(1000000, 9999999)}")
         db.add(u)
@@ -180,7 +197,10 @@ def build(db, reset=False):
     rahbars, prorabs, workers, qcs, watchers = [], [], [], [], []
     for i, (name, login) in enumerate(STAFF["rahbar"]):
         rahbars.append(mkuser(name, login, "rahbar", "project", active_projects[i % len(active_projects)].id))
-    blocks_all = db.scalars(select(Location).where(Location.kind == "block")).all()
+    # prorablar faqat faol loyihalarning bloklariga biriktiriladi
+    active_ids = [p.id for p in active_projects]
+    blocks_all = db.scalars(select(Location).where(Location.kind == "block", Location.project_id.in_(active_ids))
+                            .order_by(Location.project_id, Location.sort_order)).all()
     for i, (name, login) in enumerate(STAFF["prorab"]):
         prorabs.append(mkuser(name, login, "prorab", "location", blocks_all[i % len(blocks_all)].id))
     for i, (name, login) in enumerate(STAFF["bajaruvchi"]):
@@ -213,7 +233,7 @@ def build(db, reset=False):
 
     def add_history(task, action, actor, when, old=None, new=None, source="web"):
         db.add(TaskHistory(task_id=task.id, action=action, old_values_json=old or {}, new_values_json=new or {},
-                           actor_id=actor.id if actor else None, source=source, request_id=f"demo{R.randint(1000,9999)}",
+                           actor_id=actor.id if actor else None, source=source, request_id=f"fake{R.randint(1000,9999)}",
                            created_at=when))
 
     def add_photo(task, kind, uploader, when):
@@ -228,6 +248,8 @@ def build(db, reset=False):
                             .order_by(Location.sort_order)).all()
         rahbar = next((r for r in rahbars if r.scope_id == p.id), rahbars[0])
         qc = next((q for q in qcs if q.scope_id == p.id), qcs[0])
+        # har obyektda o'zining barqaror brigadasi bo'ladi - ishchi 9 ta obyektda sochilib yurmaydi
+        brigade = R.sample(active_workers, k=min(4, len(active_workers)))
         for b in blocks:
             floors = db.scalars(select(Location).where(Location.parent_id == b.id).order_by(Location.sort_order)).all()
             if not floors:
@@ -248,7 +270,7 @@ def build(db, reset=False):
                     start = base + timedelta(days=wi * max(2, days - 2))
                     end = start + timedelta(days=days - 1)
                     seq_no += 1
-                    worker = R.choice(active_workers)
+                    worker = R.choice(brigade)
                     plan_qty = round(R.uniform(*qty_range), 1)
                     task = Task(code=f"V-{seq_no}", project_id=p.id, location_id=floor.id, type_id=tt.id,
                                 title=f"{tname} — {b.name} {floor.name}",
@@ -370,7 +392,11 @@ def apply_state(db, task, state, worker, qc, prorab, rahbar, today, add_history,
     tt = db.get(TaskType, task.type_id)
     for kind in (tt.required_evidence_kinds or ["after"]):
         add_photo(task, kind, worker, started + timedelta(days=1))
-    submitted = started + timedelta(days=max(1, (task.planned_end - task.planned_start).days))
+    dur = max(1, (task.planned_end - task.planned_start).days)
+    if R.random() < .75:                      # muddatida topshirilgan
+        submitted = started + timedelta(days=max(1, dur - R.randint(1, 3)))
+    else:                                     # kechikkan
+        submitted = started + timedelta(days=dur + R.randint(2, 7))
     task.status = "review"
     task.review_started_at = submitted
     task.progress_percent = 100 if not items else int(sum(1 for i in items if i.is_done) / len(items) * 100)
@@ -384,7 +410,7 @@ def apply_state(db, task, state, worker, qc, prorab, rahbar, today, add_history,
         task.review_started_at = datetime.utcnow() - timedelta(days=R.randint(0, 7), hours=R.randint(0, 20))
         return
 
-    accepted = submitted + timedelta(days=R.randint(0, 3))
+    accepted = submitted + timedelta(days=R.randint(0, 1))
     task.status = "done"
     task.actual_end = accepted
     task.progress_percent = 100
@@ -394,26 +420,94 @@ def apply_state(db, task, state, worker, qc, prorab, rahbar, today, add_history,
                            mentions_json=[], source=R.choice(("web", "bot")), created_at=accepted))
 
 
+def add_recurring_rules(db, tasks):
+    """Takroriy vazifa qoidalari (masalan haftalik xavfsizlik ko'rigi)."""
+    if db.scalar(select(TaskRecurringRule).limit(1)):
+        return 0
+    tmpl = db.scalars(select(TaskTemplate)).all()
+    if not tmpl or not tasks:
+        return 0
+    n = 0
+    for t in tasks[:6]:
+        db.add(TaskRecurringRule(
+            template_id=R.choice(tmpl).id, project_id=t.project_id, location_id=t.location_id,
+            assignee_id=t.assignee_id, reviewer_id=t.reviewer_id,
+            rrule=R.choice(["FREQ=DAILY", "FREQ=WEEKLY;BYDAY=MO,WE,FR", "FREQ=WEEKLY;BYDAY=SA"]),
+            next_run_at=date.today() + timedelta(days=R.randint(1, 7)), is_active=True))
+        n += 1
+    return n
+
+
+def report(db):
+    """Nima yozilgani va mantiq to'g'riligi — bir qarashda ko'rinsin."""
+    from .models import Task as T
+    rows = [(Project, "loyiha"), (Location, "joy"), (User, "xodim"), (TaskType, "ish turi"),
+            (TaskTemplate, "shablon"), (Task, "vazifa"), (TaskChecklistItem, "checklist bandi"),
+            (TaskDependency, "bog'liqlik"), (TaskDailyProgress, "kunlik hisobot"),
+            (TaskAttachment, "foto/hujjat"), (TaskComment, "izoh"), (TaskHistory, "tarix yozuvi"),
+            (Notification, "bildirishnoma"), (TaskRecurringRule, "takroriy qoida")]
+    print("\n  Jadval bo'yicha:")
+    for model, label in rows:
+        print(f"    {db.query(model).count():>6}  {label}")
+    counts = {}
+    for t in db.scalars(select(T)):
+        counts[t.status] = counts.get(t.status, 0) + 1
+    print("\n  Holatlar: " + " · ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+
+    # mantiq tekshiruvi - soxta ma'lumot ham qoidalarga bo'ysunishi kerak
+    bad = []
+    for t in db.scalars(select(T)):
+        if t.status == "done" and (t.progress_percent != 100 or not t.actual_end):
+            bad.append(f"{t.code}: bajarilgan, lekin progress/sana to'liq emas")
+        if t.status == "blocked" and not (t.blocked_reason and t.previous_status):
+            bad.append(f"{t.code}: bloklangan, lekin sabab yo'q")
+        if t.status == "plan" and t.progress_percent:
+            bad.append(f"{t.code}: rejada, lekin progress bor")
+        if t.assignee_id == t.reviewer_id:
+            bad.append(f"{t.code}: bajaruvchi va tekshiruvchi bir odam")
+    codes = [t.code for t in db.scalars(select(T))]
+    if len(codes) != len(set(codes)):
+        bad.append("takrorlangan vazifa kodi bor")
+    print("\n  Mantiq tekshiruvi: " + ("HAMMASI TO'G'RI" if not bad else f"{len(bad)} ta muammo"))
+    for b in bad[:5]:
+        print("    ! " + b)
+    return not bad
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Soxta (sinov) ma'lumot generatori")
     ap.add_argument("--force", action="store_true", help="vazifalar bor bo'lsa ham qo'shish")
-    ap.add_argument("--reset", action="store_true", help="demo ma'lumotni tozalab qaytadan yaratish")
+    ap.add_argument("--reset", action="store_true", help="tozalab qaytadan yaratish")
+    ap.add_argument("--wipe", action="store_true", help="FAQAT tozalash - hech narsa yaratmaydi")
     a = ap.parse_args()
     Base.metadata.create_all(engine)
     db = SessionLocal()
     try:
+        if a.wipe:
+            wipe(db)
+            seed(db)
+            svc.sync_code_sequence(db)
+            db.commit()
+            print("Soxta ma'lumot tozalandi. Admin, rollar va ish turlari joyida.")
+            report(db)
+            return 0
         if db.scalar(select(Task).limit(1)) and not (a.force or a.reset):
-            print("Bazada vazifalar bor. --force yoki --reset bilan ishga tushiring.")
+            print("Bazada vazifalar bor. --reset (tozalab qaytadan) yoki --force (ustiga qo'shish) bering.")
             return 1
         tasks = build(db, reset=a.reset)
-        counts = {}
-        for t in db.scalars(select(Task)):
-            counts[t.status] = counts.get(t.status, 0) + 1
-        print(f"Tayyor: {len(tasks)} ta yangi vazifa. Holatlar: {counts}")
-        print(f"Loyihalar: {db.query(Project).count()} · joylar: {db.query(Location).count()} · "
-              f"xodimlar: {db.query(User).count()} · fotolar: {db.query(TaskAttachment).count()}")
-        print(f"Demo xodimlar paroli: {DEMO_PASSWORD} (masalan: arustamov, skarimov, rergashev, dtoshmatov)")
-        return 0
+        add_recurring_rules(db, tasks)
+        # Postgres kod ketma-ketligi: bu yerda satrlar to'g'ridan-to'g'ri yozilgani uchun
+        # ketma-ketlik orqada qoladi -> keyin yangi vazifa yaratishda kod to'qnashadi.
+        top = svc.sync_code_sequence(db)
+        db.commit()
+        print(f"\nTayyor: {len(tasks)} ta vazifa yaratildi.")
+        if top:
+            print(f"  Kod ketma-ketligi tekislandi: keyingi vazifa V-{top + 1} dan boshlanadi.")
+        ok = report(db)
+        print(f"\n  Xodimlar paroli: {FAKE_PASSWORD}")
+        print("  Kirish uchun: arustamov (rahbar) · skarimov (prorab) · rergashev (ishchi) · "
+              "dtoshmatov (tekshiruvchi) · mahmedova (kuzatuvchi)")
+        return 0 if ok else 1
     finally:
         db.close()
 

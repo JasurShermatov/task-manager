@@ -14,50 +14,6 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08
 
 
 # ---------------------------------------------------------------- fixtures
-@pytest.fixture(scope="session")
-def admin(client):
-    return U(client, "admin", "admin12345")
-
-
-@pytest.fixture(scope="session")
-def world(client, admin):
-    """Creates project/locations/users once; returns handles."""
-    roles = {r["code"]: r["id"] for r in admin.get("/roles").json()}
-    pr = admin.get("/projects").json()[0]
-    locs = admin.get("/locations", params={"project_id": pr["id"]}).json()
-    block = next(l for l in locs if l["kind"] == "block")
-    floors = [l for l in locs if l["kind"] == "floor"]
-
-    # second project + block (for scope tests)
-    pr2 = admin.post("/projects", json={"code": "SAFF-02", "name": "Ikkinchi obyekt"}).json()
-    block2 = admin.post("/locations", json={"project_id": pr2["id"], "name": "B blok", "kind": "block"}).json()
-
-    def mkuser(login, name, role, scope_type="system", scope_id=None):
-        r = admin.post("/users", json={"full_name": name, "login": login, "password": "parol1234567",
-                                       "role_id": roles[role], "scope_type": scope_type, "scope_id": scope_id})
-        assert r.status_code == 201, r.text
-        return r.json()
-
-    mkuser("rahbar", "Rahbar Rahbarov", "rahbar", "project", pr["id"])
-    mkuser("prorab", "Prorab Prorabov", "prorab", "location", block["id"])
-    mkuser("ishchi", "Rustam Ergashev", "bajaruvchi")
-    mkuser("ishchi2", "Sardor Karimov", "bajaruvchi")
-    mkuser("qc", "Doniyor Toshmatov", "tekshiruvchi", "project", pr["id"])
-    mkuser("kuzat", "Kuzatuvchi K", "kuzatuvchi", "project", pr["id"])
-    mkuser("chet", "Chet Odam", "prorab", "location", block2["id"])
-
-    types = admin.get("/task-types").json()
-    beton = next(t for t in types if t["name"] == "Beton ishlari")
-    umumiy = next(t for t in types if t["name"] == "Umumiy vazifa")
-    return {"project": pr, "project2": pr2, "block": block, "floors": floors, "roles": roles,
-            "beton": beton, "umumiy": umumiy}
-
-
-@pytest.fixture(scope="session")
-def users(client, world):
-    return {k: U(client, k, "parol1234567") for k in ("rahbar", "prorab", "ishchi", "ishchi2", "qc", "kuzat", "chet")}
-
-
 def mktask(actor, world, **over):
     body = {"project_id": world["project"]["id"], "location_id": world["floors"][0]["id"],
             "type_id": world["umumiy"]["id"], "title": "Test vazifa", "assignee_id": None,
@@ -198,11 +154,11 @@ def test_06_07_accept_return_and_self_accept_forbidden(users, world):
     assert r.status_code == 403  # bajaruvchi lacks tasks.accept at all
 
     # a reviewer who is also the assignee is refused with SELF_ACCEPT_FORBIDDEN
-    t2 = mktask(users["rahbar"], world, assignee_id=users["qc"].id, reviewer_id=users["qc"].id)
+    t2 = mktask(users["rahbar"], world, assignee_id=users["rahbar"].id, reviewer_id=users["rahbar"].id)
     users["rahbar"].post(f"/tasks/{t2['id']}/start")
     ready_for_review(users["rahbar"], t2)
     assert users["rahbar"].post(f"/tasks/{t2['id']}/submit-review").status_code == 200
-    r = users["qc"].post(f"/tasks/{t2['id']}/accept")
+    r = users["rahbar"].post(f"/tasks/{t2['id']}/accept")   # o'zi bajargan - o'zi qabul qila olmaydi
     assert r.status_code == 409 and r.json()["code"] == "SELF_ACCEPT_FORBIDDEN"
 
     # return needs a reason and increments return_count
@@ -519,9 +475,11 @@ def test_assignee_fuzzy_matching_unit():
 
 
 def test_weak_password_rejected(admin, world):
-    r = admin.post("/users", json={"full_name": "X", "login": "weak1", "password": "12345",
+    """Chegara MIN_PASSWORD_LEN (4) - undan qisqasi rad etiladi."""
+    r = admin.post("/users", json={"full_name": "X", "login": "weak1", "password": "123",
                                    "role_id": world["roles"]["bajaruvchi"], "scope_type": "system"})
     assert r.status_code == 422 and r.json()["code"] == "WEAK_PASSWORD"
+    assert r.json()["min_length"] == 4
 
 
 def test_role_permission_edit(admin, world):
@@ -603,3 +561,195 @@ def test_each_role_sees_its_own_panel(users, admin):
         for p in e["hasnt"]:
             assert p not in perms, f"{who} must NOT have {p}"
     assert set(admin.perms) >= set().union(*[set(v["has"]) | set(v["hasnt"]) for v in expect.values()])
+
+
+# ---------------------------------------------------------------- daily report reaches the managers
+def test_daily_report_notifies_prorab_rahbar_admin_and_reviewer(client, admin, users, world):
+    """Ishchi kunlik hisobot topshirsa - prorab, rahbar, superadmin va tekshiruvchi darhol ko'radi."""
+    t = mktask(users["rahbar"], world, title="Hisobot borish tekshiruvi",
+               assignee_id=users["ishchi"].id, reviewer_id=users["qc"].id,
+               planned_quantity=100, unit="m3", checklist=[])
+    users["ishchi"].post(f"/tasks/{t['id']}/start")
+
+    r = users["ishchi"].post(f"/tasks/{t['id']}/daily-progress",
+                             json={"date": D(0), "quantity": 35, "workers_count": 9, "note": "Yomg'ir bo'ldi"})
+    assert r.status_code == 201
+
+    def latest(u):
+        return [n for n in u.get("/notifications").json() if n["event"] == "daily_report" and n["task_id"] == t["id"]]
+
+    for who in ("prorab", "rahbar", "qc"):
+        got = latest(users[who])
+        assert got, f"{who} kunlik hisobotni ko'rmadi"
+        p = got[0]["payload_json"]
+        assert p["quantity"] == 35 and p["unit"] == "m3" and p["workers"] == 9
+        assert p["by"] == "Rustam Ergashev" and p["note"] == "Yomg'ir bo'ldi"
+        assert p["total"] == 35 and p["plan"] == 100
+        assert got[0]["is_read"] is False
+    assert latest(admin), "superadmin kunlik hisobotni ko'rmadi"
+    # hisobotni yozgan odamning o'ziga xabar kelmaydi
+    assert not latest(users["ishchi"])
+    # kuzatuvchiga ham kelmaydi - u nazoratchi emas
+    assert not latest(users["kuzat"])
+
+
+def test_daily_report_queued_for_telegram_when_linked(client, users, world):
+    svc = {"X-Service-Token": "test-service"}
+    # prorabni telegramga bog'laymiz
+    code = users["prorab"].post("/telegram/link-code").json()["code"]
+    assert client.post("/telegram/consume-code", json={"code": code, "telegram_user_id": 771001}, headers=svc).status_code == 200
+    client.get("/telegram/outbox", headers=svc)  # navbatni tozalaymiz
+    t = mktask(users["rahbar"], world, title="Telegramga hisobot", assignee_id=users["ishchi"].id,
+               reviewer_id=users["qc"].id, planned_quantity=50, unit="m2", checklist=[])
+    users["ishchi"].post(f"/tasks/{t['id']}/start")
+    users["ishchi"].post(f"/tasks/{t['id']}/daily-progress", json={"date": D(0), "quantity": 20, "workers_count": 5})
+    out = client.get("/telegram/outbox", headers=svc).json()
+    mine = [o for o in out if o["task_id"] == t["id"] and o["event"] == "daily_report"]
+    assert mine and mine[0]["telegram_user_id"] == 771001
+    assert mine[0]["payload"]["quantity"] == 20
+
+
+def test_short_password_is_allowed(admin, world, client):
+    """Ichki tizim: 4 belgili parol yetarli."""
+    r = admin.post("/users", json={"full_name": "Qisqa Parol", "login": "qisqa", "password": "1234",
+                                   "role_id": world["roles"]["bajaruvchi"], "scope_type": "system"})
+    assert r.status_code == 201, r.text
+    assert client.post("/auth/login", json={"login": "qisqa", "password": "1234"}).status_code == 200
+    too_short = admin.post("/users", json={"full_name": "Juda Qisqa", "login": "juda", "password": "12",
+                                           "role_id": world["roles"]["bajaruvchi"], "scope_type": "system"})
+    assert too_short.status_code == 422 and too_short.json()["code"] == "WEAK_PASSWORD"
+    assert admin.get("/meta").json()["password_min"] == 4
+
+
+def test_worker_lists_only_projects_he_works_on(users, world, admin):
+    seen = {p["id"] for p in users["ishchi"].get("/projects").json()}
+    mine = {t["project_id"] for t in users["ishchi"].get("/tasks", params={"limit": 200}).json()["items"]}
+    assert seen == mine or seen <= set(p["id"] for p in admin.get("/projects").json())
+    assert world["project2"]["id"] not in seen or world["project2"]["id"] in mine
+
+
+# ---------- administratsiya: sozlamalar, rollar, statistika ----------
+def test_bot_username_setting_is_admin_only(client, admin, users):
+    svc = {"X-Service-Token": "test-service"}
+    # bot ishga tushganda o'zini ro'yxatdan o'tkazadi
+    r = client.post("/telegram/register-username", json={"username": "@txt_task_managerBot"}, headers=svc)
+    assert r.status_code == 200 and r.json()["bot_username"] == "txt_task_managerBot"
+
+    # hamma ko'ra oladi - botga o'tish havolasi uchun kerak
+    s = users["ishchi"].get("/settings").json()
+    assert s["bot_username"] == "txt_task_managerBot"
+    assert s["bot_url"] == "https://t.me/txt_task_managerBot"
+
+    # lekin faqat superadmin o'zgartira oladi
+    assert users["rahbar"].patch("/settings", {"bot_username": "boshqa_bot"}).status_code == 403
+    assert users["prorab"].patch("/settings", {"bot_username": "boshqa_bot"}).status_code == 403
+
+    ok = admin.patch("/settings", {"bot_username": "@saff_qurilish_bot"})
+    assert ok.status_code == 200
+    assert ok.json() == {"bot_username": "saff_qurilish_bot", "bot_url": "https://t.me/saff_qurilish_bot"}
+    assert users["kuzat"].get("/settings").json()["bot_username"] == "saff_qurilish_bot"
+
+    # noto'g'ri format va noma'lum kalit o'tmaydi
+    bad = admin.patch("/settings", {"bot_username": "yo mon nom!"})
+    assert bad.status_code == 422 and bad.json()["field_errors"]["bot_username"] == "invalid"
+    assert admin.patch("/settings", {"jwt_secret": "hack"}).status_code == 422
+    # eski qiymat saqlanib qoldi
+    assert admin.get("/settings").json()["bot_username"] == "saff_qurilish_bot"
+
+
+def test_permission_groups_cover_the_whole_catalog(admin, users):
+    groups = admin.get("/roles/permission-groups").json()
+    flat = [p for g in groups for p in g["permissions"]]
+    catalog = admin.get("/roles/permissions").json()
+    assert sorted(flat) == sorted(catalog), "matritsada tushib qolgan ruxsat bor"
+    assert len(flat) == len(set(flat)), "ruxsat ikki guruhda takrorlangan"
+    assert [g["group"] for g in groups] == ["tasks", "flow", "content", "reports", "admin"]
+    # rol matritsasi faqat administratsiya bo'limida - boshqalarga yopiq
+    assert users["prorab"].patch(f"/roles/{admin.get('/roles').json()[1]['id']}",
+                                 {"permissions_json": ["tasks.read"]}).status_code == 403
+
+
+def test_project_stats_follow_the_viewer_scope(admin, users, world):
+    all_stats = admin.get("/projects/stats").json()
+    assert str(world["project"]["id"]) in all_stats or world["project"]["id"] in all_stats
+    row = all_stats[str(world["project"]["id"])]
+    assert set(row) == {"total", "open", "overdue", "done"}
+    assert row["total"] >= row["open"] + row["done"] - row["total"]  # sanity
+    assert row["total"] > 0
+
+    # boshqa obyektdagi prorab bu loyihaning raqamlarini ko'rmaydi
+    chet = users["chet"].get("/projects/stats").json()
+    assert str(world["project"]["id"]) not in chet
+
+    # ro'yxatdagi raqam haqiqiy vazifalar soniga to'g'ri keladi
+    mine = admin.get("/tasks", params={"project_id": world["project"]["id"], "limit": 200}).json()["total"]
+    assert row["total"] == mine
+
+
+def test_password_reset_and_self_change_keep_one_record(client, admin, world):
+    """Superadmin unutilgan parolni yangilaydi, xodim o'zi almashtiradi - oxirgi versiya ishlaydi."""
+    u = admin.post("/users", json={"full_name": "Anvar Qodirov", "login": "anvarq", "password": "1111",
+                                   "role_id": world["roles"]["bajaruvchi"], "scope_type": "system"}).json()
+    assert client.post("/auth/login", json={"login": "anvarq", "password": "1111"}).status_code == 200
+
+    # 1) superadmin administratsiyadan yangilaydi
+    assert admin.patch(f"/users/{u['id']}", {"password": "2222"}).status_code == 200
+    assert client.post("/auth/login", json={"login": "anvarq", "password": "1111"}).status_code == 401
+    anvar = U(client, "anvarq", "2222")
+
+    # 2) xodim o'z kabinetidan almashtiradi - ayni o'sha yozuv o'zgaradi
+    assert anvar.patch(f"/users/{u['id']}", {"password": "3333"}).status_code == 200
+    assert client.post("/auth/login", json={"login": "anvarq", "password": "2222"}).status_code == 401
+    assert client.post("/auth/login", json={"login": "anvarq", "password": "3333"}).status_code == 200
+
+    # xodim o'zgani parolini yoki o'z rolini o'zgartira olmaydi
+    assert anvar.patch(f"/users/{admin.id}", {"password": "4444"}).status_code == 403
+    anvar.patch(f"/users/{u['id']}", {"role_id": world["roles"]["admin"]})
+    row = next(x for x in admin.get("/users").json() if x["id"] == u["id"])
+    assert row["role"]["code"] == "bajaruvchi"
+
+
+def test_staff_list_never_exposes_credentials(admin, users):
+    for row in admin.get("/users").json():
+        assert not (set(row) & {"password", "password_hash", "login_password"})
+    # xodimlar ro'yxati hammaga ochiq, ammo tahrir qilish yo'q
+    assert users["prorab"].get("/users").status_code == 200
+    assert users["prorab"].post("/users", json={"full_name": "X", "login": "x1", "password": "1234",
+                                                "role_id": 1, "scope_type": "system"}).status_code == 403
+
+
+def test_assignee_must_be_able_to_execute(users, world):
+    """Bajaruvchi qilib 'tasks.start' huquqi yo'q odam (tekshiruvchi/kuzatuvchi) tanlansa -
+    u ishni boshlay olmaydi va vazifa 'rejada' holatida qotib qolar edi."""
+    body = {"project_id": world["project"]["id"], "location_id": world["floors"][0]["id"],
+            "type_id": world["umumiy"]["id"], "title": "Yaroqsiz bajaruvchi",
+            "assignee_id": users["qc"].id, "reviewer_id": users["rahbar"].id,
+            "planned_start": D(0), "planned_end": D(3)}
+    r = users["rahbar"].post("/tasks", json=body)
+    assert r.status_code == 422 and r.json()["field_errors"]["assignee_id"] == "cannot_execute"
+    body["assignee_id"] = users["kuzat"].id
+    assert users["rahbar"].post("/tasks", json=body).status_code == 422
+    # ishchi yoki prorab bo'lsa - o'tadi
+    body["assignee_id"] = users["ishchi"].id
+    assert users["rahbar"].post("/tasks", json=body).status_code == 201
+
+
+def test_reviewer_without_accept_permission_is_rejected(users, world):
+    """Tekshiruvchi qilib 'tasks.accept' huquqi yo'q odam (masalan prorab yoki kuzatuvchi) tanlansa -
+    vazifa hech qachon qabul qilinmaydigan holatda 'tekshiruvda' abadiy osilib qolar edi."""
+    body = {"project_id": world["project"]["id"], "location_id": world["floors"][0]["id"],
+            "type_id": world["umumiy"]["id"], "title": "Yaroqsiz tekshiruvchi",
+            "assignee_id": users["ishchi"].id, "reviewer_id": users["prorab"].id,
+            "planned_start": D(0), "planned_end": D(3)}
+    r = users["rahbar"].post("/tasks", json=body)
+    assert r.status_code == 422 and r.json()["field_errors"]["reviewer_id"] == "cannot_accept"
+    # kuzatuvchi ham qabul qila olmaydi
+    body["reviewer_id"] = users["kuzat"].id
+    assert users["rahbar"].post("/tasks", json=body).status_code == 422
+    # lekin rahbar yoki admin (yoki tekshiruvchi) tayinlansa - o'tadi
+    body["reviewer_id"] = users["rahbar"].id
+    assert users["rahbar"].post("/tasks", json=body).status_code == 201
+    # tahrirlashda ham xuddi shu qoida ishlaydi
+    t = mktask(users["rahbar"], world, assignee_id=users["ishchi"].id, reviewer_id=users["qc"].id)
+    bad_patch = users["rahbar"].patch(f"/tasks/{t['id']}", {"row_version": t["row_version"], "reviewer_id": users["ishchi"].id})
+    assert bad_patch.status_code == 422 and bad_patch.json()["field_errors"]["reviewer_id"] == "cannot_accept"

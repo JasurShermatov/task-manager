@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str = "admin12345"
     TZ_NAME: str = "Asia/Tashkent"
     BOT_TOKEN: str = ""
+    BOT_USERNAME: str = ""
     WEBHOOK_SECRET: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_STT_MODEL: str = "gpt-4o-transcribe"

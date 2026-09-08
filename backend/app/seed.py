@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from .auth import hash_password
 from .config import settings
-from .models import Role, User, TaskType, Project, Location, TaskTemplate
+from .models import Role, User, TaskType, Project, Location, TaskTemplate, AppSetting
 from .permissions import SYSTEM_ROLES
 
 DEFAULT_TYPES = [
@@ -72,4 +72,6 @@ def seed(db: Session):
             db.add(TaskTemplate(name="Monolit plita — qavat", type_id=beton.id, title_pattern="Monolit plita — {joy} betonlash",
                                 default_duration_days=5, checklist_json=beton.default_checklist_json,
                                 required_evidence_kinds=beton.required_evidence_kinds))
+    if not db.get(AppSetting, "bot_username"):
+        db.add(AppSetting(key="bot_username", value=(settings.BOT_USERNAME or "").lstrip("@")))
     db.commit()

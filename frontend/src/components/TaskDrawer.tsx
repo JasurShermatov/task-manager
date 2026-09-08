@@ -445,9 +445,14 @@ function EditDialog({ tk, onClose, onSaved }: any) {
       <label className="lbl">{t('priority')}<select className="sel" value={f.priority} onChange={e => setF({ ...f, priority: e.target.value })}>
         {['low', 'normal', 'high'].map(p => <option key={p} value={p}>{t('pr_' + p)}</option>)}</select></label>
       <label className="lbl">{t('cr_assignee')}<select className="sel" value={f.assignee_id} onChange={e => setF({ ...f, assignee_id: Number(e.target.value) })}>
-        {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}</select></label>
+        {/* faqat "tasks.start" huquqi bor odam - aks holda vazifa rejada qotib qoladi */}
+        {users.filter(u => u.role?.permissions_json?.includes('tasks.start') || u.id === f.assignee_id)
+          .map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}</select></label>
       <label className="lbl">{t('cr_reviewer')}<select className="sel" value={f.reviewer_id} onChange={e => setF({ ...f, reviewer_id: Number(e.target.value) })}>
-        {users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}</select></label>
+        {/* faqat "tasks.accept" huquqi bor odam tanlanadi - aks holda vazifa hech kim
+            qabul qila olmaydigan holatda tekshiruvda osilib qoladi */}
+        {users.filter(u => u.role?.permissions_json?.includes('tasks.accept') || u.id === f.reviewer_id)
+          .map(u => <option key={u.id} value={u.id}>{u.full_name} · {u.role?.name}</option>)}</select></label>
       <label className="lbl">{t('cr_start')}<input className="inp" type="date" value={f.planned_start} onChange={e => setF({ ...f, planned_start: e.target.value })} /></label>
       <label className="lbl">{t('cr_end')}<input className="inp" type="date" value={f.planned_end} onChange={e => setF({ ...f, planned_end: e.target.value })} /></label>
       <label className="lbl">{t('cr_location')}<select className="sel" value={f.location_id} onChange={e => setF({ ...f, location_id: e.target.value })}>
