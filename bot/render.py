@@ -7,7 +7,14 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from config import settings
-from i18n import t, status_label, prio_label, block_label, STATUS_ICON
+from i18n import t, status_label, prio_label, block_label, field_label, STATUS_ICON
+
+try:  # Bot API 7.11 / aiogram 3.15+ - bir bosishda matnni nusxa oladi
+    from aiogram.types import CopyTextButton
+except ImportError:  # eski aiogram: <pre> blokini bosib nusxa olinadi
+    CopyTextButton = None
+
+COPY_LIMIT = 256  # Telegram cheklovi: copy_text.text uzunligi
 
 
 def fmt_date(s) -> str:
@@ -172,6 +179,42 @@ def confirm_kb(lang: str, d: dict) -> InlineKeyboardMarkup:
     row.append(InlineKeyboardButton(text=t(lang, "c_edit"), callback_data="nt:edit"))
     row.append(InlineKeyboardButton(text=t(lang, "c_cancel"), callback_data="nt:cancel"))
     b.row(*row)
+    return b.as_markup()
+
+
+DASH = "—"
+BLOCK_ORDER = ("title", "assignee", "reviewer", "project", "location", "type", "deadline", "priority", "description")
+
+
+def task_block(lang: str, d: dict, names: dict) -> str:
+    """Vazifani oddiy matn qilib beradi - foydalanuvchi shuni nusxa olib, xohlagan joyini
+    o'zgartirib qaytaradi. Har satr «Kalit: qiymat», shuning uchun qaytganda aniq o'qiladi."""
+    end = d.get("planned_end")
+    try:
+        end = date.fromisoformat(str(end)[:10]).strftime("%d.%m.%Y") if end else DASH
+    except (TypeError, ValueError):
+        end = str(end)
+    vals = {
+        "title": d.get("title") or DASH,
+        "assignee": names.get("assignee") or DASH,
+        "reviewer": names.get("reviewer") or DASH,
+        "project": names.get("project") or DASH,
+        "location": names.get("location") or DASH,
+        "type": names.get("type") or DASH,
+        "deadline": end,
+        "priority": prio_label(lang, d.get("priority") or "normal"),
+        # tavsif ko'p satrli bo'lsa blok buzilmasin
+        "description": " ".join((d.get("description") or DASH).split()),
+    }
+    return "\n".join(f"{field_label(lang, k)}: {vals[k]}" for k in BLOCK_ORDER)
+
+
+def edit_block_kb(lang: str, block: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if CopyTextButton is not None and len(block) <= COPY_LIMIT:
+        b.row(InlineKeyboardButton(text=t(lang, "e_copy"), copy_text=CopyTextButton(text=block)))
+    b.row(InlineKeyboardButton(text=t(lang, "e_buttons"), callback_data="nt:fields"),
+          InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="nt:back"))
     return b.as_markup()
 
 

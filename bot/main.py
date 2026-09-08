@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import re
 from datetime import date, timedelta, datetime
+from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
@@ -17,9 +19,10 @@ from aiogram.exceptions import TelegramBadRequest
 
 from api import api, ApiError
 from config import settings
-from i18n import t, block_label, prio_label, T
+from i18n import t, block_label, prio_label, field_label, field_of, PRIO, T
 from render import (task_card, task_kb, tasks_list_kb, checklist_kb, main_menu, cancel_kb, confirm_card, confirm_kb,
-                    edit_menu_kb, deadline_kb, prio_kb, list_kb, block_reasons_kb, lang_kb, fmt_date, loc_str)
+                    edit_menu_kb, edit_block_kb, task_block, deadline_kb, prio_kb, list_kb, block_reasons_kb, lang_kb,
+                    fmt_date, loc_str)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("bot")
@@ -139,6 +142,7 @@ class NewTask(StatesGroup):
     deadline_custom = State()
     prio = State()
     confirm = State()
+    edit_all = State()
     edit_title = State()
     edit_desc = State()
     edit_loc = State()
@@ -934,8 +938,47 @@ async def _set_deadline(target, state: FSMContext, u: dict, lang: str, end: date
     await m.answer(t(lang, "nt_priority"), reply_markup=prio_kb(lang))
 
 
+# «ertaga kechgacha» kabi gaplarda vaqt qismini tashlaymiz - sana o'zgarmaydi
+_TIME_TAIL = ("kechgacha", "kechqurun", "kechga", "kechasi", "ertalabgacha", "ertalab", "kunduzi", "kechigacha",
+              "gacha", "kunga", "kuni", "soat 18 gacha", "до вечера", "вечером", "к вечеру", "до конца дня",
+              "by evening", "eod", "end of day")
+_DATE_WORDS = {
+    0: ("bugun", "shu kun", "сегодня", "today"),
+    1: ("ertaga", "erta", "завтра", "tomorrow"),
+    2: ("indinga", "indin", "birinkun", "послезавтра", "day after tomorrow"),
+    7: ("hafta", "bir hafta", "keyingi hafta", "неделя", "через неделю", "на неделе", "следующая неделя",
+        "week", "a week", "next week"),
+}
+
+
+def _word_date(s: str) -> Optional[date]:
+    """«ertaga», «ertaga kechgacha», «3 kun», «через 5 дней» -> sana. Aks holda None.
+    Faqat butun matn shu so'zdan iborat bo'lsa ishlaydi - uzun gapda sana LLM tomonidan topiladi."""
+    n = " ".join(re.sub(r"[^0-9a-zа-яё\s'ʻ’]+", " ", (s or "").lower()).split())
+    if not n:
+        return None
+    for tail in sorted(_TIME_TAIL, key=len, reverse=True):
+        if n.endswith(" " + tail) or n == tail:
+            n = n[: len(n) - len(tail)].strip()
+            break
+    if not n:
+        return None
+    for days, words in _DATE_WORDS.items():
+        if n in words:
+            return date.today() + timedelta(days=days)
+    m = re.fullmatch(r"(?:через\s+|in\s+)?(\d{1,3})\s*(kun(?:dan|ga|da)?|дн(?:я|ей|ей)?|day|days)", n)
+    if m:
+        return date.today() + timedelta(days=int(m.group(1)))
+    return None
+
+
 def parse_date(s: str) -> Optional[date]:
-    s = s.strip()
+    s = (s or "").strip()
+    if not s:
+        return None
+    w = _word_date(s)
+    if w:
+        return w
     for fmt in ("%d.%m.%Y", "%d.%m.%y", "%d.%m", "%Y-%m-%d", "%d/%m/%Y", "%d/%m"):
         try:
             d = datetime.strptime(s, fmt).date()
@@ -1000,12 +1043,237 @@ async def nt_back(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
     await show_confirm(cb, state, u["id"], lang, edit=True)
 
 
+# ---- «Tahrirlash»: vazifa oddiy matn bo'lib chiqadi, xohlagan joyi tuzatilib qaytariladi ----
+_EMPTY_VALUES = {"", "—", "-", "–", "yoq", "нет", "none", "null", "bosh", "пусто", "empty"}
+
+
+def _norm(s: str) -> str:
+    """Ism/nomlarni solishtirish uchun: apostrof, sh/ch/x farqlari va kirill tashlanadi.
+    «Rustam Erg'ashev» va «Rustam Ergashov» bir xil ko'rinadi."""
+    s = (s or "").lower().strip()
+    for a, b in (("ʻ", ""), ("’", ""), ("'", ""), ("`", ""), ("ў", "u"), ("қ", "q"), ("ғ", "g"), ("ҳ", "h")):
+        s = s.replace(a, b)
+    s = s.replace("sh", "s").replace("ch", "c").replace("x", "h")
+    return " ".join(re.sub(r"[^0-9a-zа-яё ]+", " ", s).split())
+
+
+def _is_empty(v: str) -> bool:
+    return _norm(v) in _EMPTY_VALUES
+
+
+def _match_name(q: str, items: list[dict], key) -> tuple[Optional[dict], list[dict]]:
+    """(topilgani, ikkilanish ro'yxati). Ikkitasi teng chiqsa hech birini tanlamaymiz."""
+    n = _norm(q)
+    if not n or not items:
+        return None, []
+    for pick in (lambda it: _norm(key(it)) == n,
+                 lambda it: _norm(key(it)).startswith(n) or n in _norm(key(it)).split()):
+        hits = [it for it in items if pick(it)]
+        if len(hits) == 1:
+            return hits[0], []
+        if hits:
+            return None, hits
+    scored = sorted(((SequenceMatcher(None, n, _norm(key(it))).ratio(), i, it) for i, it in enumerate(items)),
+                    key=lambda x: -x[0])
+    if scored and scored[0][0] >= 0.72:
+        if len(scored) > 1 and scored[1][0] >= scored[0][0] - 0.04:
+            return None, [scored[0][2], scored[1][2]]
+        return scored[0][2], []
+    return None, []
+
+
+def _prio_of(v: str) -> Optional[str]:
+    n = _norm(v)
+    for lang_prio in PRIO.values():
+        for code, label in lang_prio.items():
+            if _norm(label) == n:
+                return code
+    for code, words in (("low", ("low", "past", "паст")),
+                        ("normal", ("normal", "oddiy", "обычный", "средне")),
+                        ("high", ("high", "shoshilinch", "srochno", "срочно", "срочный", "urgent", "muhim", "важно"))):
+        if n in {_norm(w) for w in words}:
+            return code
+    return None
+
+
+def parse_block(text: str) -> dict[str, str]:
+    """«Sarlavha: ...» ko'rinishidagi matnni maydonlarga ajratadi.
+    Kalitga o'xshamagan satrlar oldingi maydonning davomi hisoblanadi (ko'p satrli tavsif)."""
+    out: dict[str, str] = {}
+    cur: Optional[str] = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if ":" in line:
+            k, v = line.split(":", 1)
+            f = field_of(k)
+            if f:
+                out[f], cur = v.strip(), f
+                continue
+        if cur and line:
+            out[cur] = (out[cur] + " " + line).strip()
+    return out
+
+
+async def _loc_items(uid: int, project_id: Optional[int]) -> list[dict]:
+    """Joylar to'liq yo'l bilan: «B blok · 3-qavat · 12-xona»."""
+    if not project_id:
+        return []
+    locs = await api.locations(uid, project_id)
+    by_id = {l["id"]: l for l in locs}
+
+    def label(l):
+        parts, cur = [], l
+        while cur:
+            parts.append(cur["name"])
+            cur = by_id.get(cur["parent_id"]) if cur.get("parent_id") else None
+        return " · ".join(reversed(parts))
+    return [{"id": l["id"], "name": label(l)}
+            for l in sorted(locs, key=lambda l: (l["parent_id"] or 0, l["sort_order"]))]
+
+
+async def apply_block(state: FSMContext, u: dict, lang: str, text: str) -> Optional[list[str]]:
+    """Tahrirlangan matnni vazifaga qo'llaydi. Blok emas bo'lsa None -> matn erkin gap sifatida o'qiladi.
+    Hech narsa taxmin qilinmaydi: nomni topa olmasak eski qiymat qoladi va ogohlantiramiz."""
+    f = parse_block(text)
+    if not f:                     # «Kalit: qiymat» yo'q - bu oddiy gap, uni model o'qiydi
+        return None
+    uid, d = u["id"], await state.get_data()
+    upd: dict[str, Any] = {}
+    notes: list[str] = []
+
+    def bad(key: str, v: str):
+        notes.append(t(lang, "e_nf", field=field_label(lang, key), value=(v or "—")[:60]))
+
+    def same(v: str, cur: Optional[str]) -> bool:
+        return _norm(v) == _norm(cur or "")
+
+    if "title" in f:
+        v = f["title"]
+        if _is_empty(v):
+            bad("title", v)          # sarlavhasiz vazifa yaratib bo'lmaydi
+        else:
+            upd["title"] = v[:250]
+    if "description" in f:
+        v = f["description"]
+        upd["description"] = None if _is_empty(v) else v[:2000]
+    if "priority" in f:
+        p = _prio_of(f["priority"])
+        if p:
+            upd["priority"] = p
+        else:
+            bad("priority", f["priority"])
+    if "deadline" in f:
+        v = f["deadline"]
+        if _is_empty(v):
+            upd["planned_end"] = None
+            upd["warnings"] = sorted(set((d.get("warnings") or []) + ["no_deadline"]))
+        else:
+            dt = parse_date(v)
+            if not dt:
+                bad("deadline", v)
+            else:
+                upd["planned_end"] = dt.isoformat()
+                upd["warnings"] = [w for w in (d.get("warnings") or []) if w != "no_deadline"]
+                start = d.get("planned_start") or date.today().isoformat()
+                if dt.isoformat() < start:
+                    upd["planned_start"] = dt.isoformat()
+    if "project" in f and not same(f["project"], d.get("project_name")):
+        if _is_empty(f["project"]):
+            bad("project", f["project"])
+        else:
+            p, _amb = _match_name(f["project"], await api.projects(uid), lambda x: x["name"])
+            if p:
+                upd.update(project_id=p["id"], project_name=p["name"], location_id=None, location_name=None)
+            else:
+                bad("project", f["project"])
+    pid = upd.get("project_id", d.get("project_id"))
+    project_changed = "project_id" in upd
+    if "location" in f:
+        v = f["location"]
+        if _is_empty(v):
+            upd.update(location_id=None, location_name=None)
+        elif project_changed or not same(v, d.get("location_name")):
+            items = await _loc_items(uid, pid)
+            loc, _amb = _match_name(v, items, lambda x: x["name"])
+            if not loc:
+                loc, _amb = _match_name(v, items, lambda x: x["name"].split(" · ")[-1])
+            if loc:
+                upd.update(location_id=loc["id"], location_name=loc["name"])
+            else:
+                bad("location", v)
+    if "type" in f and not same(f["type"], d.get("type_name")):
+        if _is_empty(f["type"]):
+            bad("type", f["type"])
+        else:
+            ty, _amb = _match_name(f["type"], await api.task_types(uid), lambda x: x["name"])
+            if ty:
+                upd.update(type_id=ty["id"], type_name=ty["name"])
+            else:
+                bad("type", f["type"])
+    if "assignee" in f and (project_changed or not same(f["assignee"], d.get("assignee_name"))):
+        v = f["assignee"]
+        if _is_empty(v):
+            upd.update(assignee_id=None, assignee_name=None, assignee_candidates=[])
+        else:
+            # ishni bajara olmaydigan odam taklif qilinmaydi - aks holda server rad etadi
+            people = [x for x in await api.users(uid, project_id=pid) if _can_do(x) and x["id"] != uid]
+            person, amb = _match_name(v, people, lambda x: x["full_name"])
+            if person:
+                upd.update(assignee_id=person["id"], assignee_name=person["full_name"], assignee_candidates=[])
+            elif amb:
+                upd.update(assignee_id=None, assignee_name=None, assignee_name_heard=v,
+                           assignee_candidates=[{"id": x["id"], "full_name": x["full_name"], "score": 90,
+                                                 "hint": (x.get("role") or {}).get("name") or ""} for x in amb[:3]])
+            else:
+                bad("assignee", v)
+    if "reviewer" in f and (project_changed or not same(f["reviewer"], d.get("reviewer_name"))):
+        v = f["reviewer"]
+        if _is_empty(v):
+            upd.update(reviewer_id=None, reviewer_name=None)
+        else:
+            people = [x for x in await api.users(uid, project_id=pid) if _can_accept(x)]
+            person, _amb = _match_name(v, people, lambda x: x["full_name"])
+            if person:
+                upd.update(reviewer_id=person["id"], reviewer_name=person["full_name"])
+            else:
+                bad("reviewer", v)
+
+    upd["_editing"] = False
+    await state.update_data(**upd)
+    # loyiha almashgan yoki tekshiruvchi bo'shab qolgan bo'lsa - o'zi topilsin
+    if project_changed and "reviewer" not in f:
+        await state.update_data(reviewer_id=None, reviewer_name=None)
+    if not (await state.get_data()).get("reviewer_id"):
+        await _apply_default_reviewer(state, u)
+    return notes
+
+
 @router.callback_query(F.data == "nt:edit")
-async def nt_edit_menu(cb: CallbackQuery, state: FSMContext, lang: str):
-    # Tugmalar qoladi, lekin asosiysi - shunchaki yozib tuzatish mumkinligini aytamiz
-    await cb.message.edit_reply_markup(reply_markup=edit_menu_kb(lang))
-    await cb.message.answer(t(lang, "e_free"))
+async def nt_edit_menu(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
+    """Vazifani oddiy matn qilib beramiz: nusxa olib, xohlagan joyini tuzatib, oddiy xabar kabi yuboradi."""
+    d = await state.get_data()
+    block = task_block(lang, d, await _names(u["id"], d))
+    await state.set_state(NewTask.edit_all)
+    await cb.message.answer(f"{t(lang, 'e_block_head')}\n\n<pre>{html.escape(block)}</pre>{t(lang, 'e_block_tip')}",
+                            reply_markup=edit_block_kb(lang, block))
     await cb.answer()
+
+
+@router.callback_query(F.data == "nt:fields")
+async def nt_edit_fields(cb: CallbackQuery, state: FSMContext, lang: str):
+    """Yozishni xohlamaganlar uchun eski tugmali tahrir."""
+    await cb.message.edit_reply_markup(reply_markup=edit_menu_kb(lang))
+    await cb.answer()
+
+
+@router.message(NewTask.edit_all, F.text)
+async def nt_edit_all(msg: Message, state: FSMContext, u: dict, lang: str):
+    notes = await apply_block(state, u, lang, msg.text)
+    if notes is None:                      # blok emas - odatdagi erkin matn sifatida tushunamiz
+        return await merge_free_text(msg, state, u, lang)
+    if notes:
+        await msg.answer("\n".join(notes))
+    await show_confirm(msg, state, u["id"], lang)
 
 
 @router.callback_query(F.data.startswith("nt:edit:"))
@@ -1037,16 +1305,7 @@ async def nt_edit_field(cb: CallbackQuery, state: FSMContext, u: dict, lang: str
         await ask_project(cb.message, state, u, lang, edit_cb=cb)
     elif field == "loc":
         d = await state.get_data()
-        locs = await api.locations(uid, d.get("project_id")) if d.get("project_id") else []
-        by_id = {l["id"]: l for l in locs}
-
-        def label(l):
-            parts, cur = [], l
-            while cur:
-                parts.append(cur["name"])
-                cur = by_id.get(cur["parent_id"]) if cur.get("parent_id") else None
-            return " · ".join(reversed(parts))
-        items = [{"id": l["id"], "name": label(l)} for l in sorted(locs, key=lambda l: (l["parent_id"] or 0, l["sort_order"]))]
+        items = await _loc_items(uid, d.get("project_id"))
         await state.update_data(_locs=items)
         await state.set_state(NewTask.edit_loc)
         await cb.message.edit_text(t(lang, "nt_location"), reply_markup=list_kb(items, "ntl", skip_cb="ntl:0", skip_text=t(lang, "btn_skip")))
@@ -1149,7 +1408,17 @@ async def _from_parsed(msg: Message, state: FSMContext, u: dict, lang: str, pars
 
 @router.message(NewTask.confirm, F.text)
 async def confirm_text_edit(msg: Message, state: FSMContext, u: dict, lang: str):
-    """Free text while a card is shown: re-parse and merge (lets the manager say 'muddat 25.10' or 'Rustamga')."""
+    """Karta turganda kelgan matn: tahrirlangan blok bo'lsa - to'g'ridan-to'g'ri qo'llanadi,
+    aks holda erkin gap sifatida o'qib qo'shiladi ('muddat 25.10', 'Rustamga')."""
+    notes = await apply_block(state, u, lang, msg.text)
+    if notes is not None:
+        if notes:
+            await msg.answer("\n".join(notes))
+        return await show_confirm(msg, state, u["id"], lang)
+    await merge_free_text(msg, state, u, lang)
+
+
+async def merge_free_text(msg: Message, state: FSMContext, u: dict, lang: str):
     d = await state.get_data()
     dt = parse_date(msg.text or "")
     if dt:

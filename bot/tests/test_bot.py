@@ -209,6 +209,79 @@ def test_date_parser():
     assert parse_date("salom") is None
 
 
+def test_spoken_deadlines_resolve_to_a_real_date():
+    """«ertaga kechgacha» — sana ertangi kun, vaqt qismi sanani surmaydi."""
+    from main import parse_date
+    today = date.today()
+    assert parse_date("bugun") == today
+    assert parse_date("ertaga") == today + timedelta(days=1)
+    assert parse_date("ertaga kechgacha") == today + timedelta(days=1)
+    assert parse_date("Ertaga kechqurun") == today + timedelta(days=1)
+    assert parse_date("indinga") == today + timedelta(days=2)
+    assert parse_date("завтра") == today + timedelta(days=1)
+    assert parse_date("tomorrow") == today + timedelta(days=1)
+    assert parse_date("3 kun") == today + timedelta(days=3)
+    assert parse_date("через 5 дней") == today + timedelta(days=5)
+    assert parse_date("keyingi hafta") == today + timedelta(days=7)
+    # uzun gap sana emas - uni model o'qiydi, parser taxmin qilmasligi kerak
+    assert parse_date("ertaga Rustamga devor terishni ayting") is None
+
+
+# ---------------------------------------------------------------- tahrirlash bloki
+def test_task_block_round_trips_through_the_parser():
+    """Bot chiqargan matnni o'zi qaytadan o'qiy olishi shart - aks holda «Tahrirlash» buziladi."""
+    from main import parse_block
+    d = {"title": "Devorlarni suvash", "priority": "high", "planned_end": D(3), "description": "Ikki qavat"}
+    names = {"assignee": "Rustam Ergashev", "reviewer": "Doniyor Toshmatov", "project": "TXT-07",
+             "location": "B blok · 8-qavat", "type": "Suvoq ishlari"}
+    for lang in ("uz", "ru", "en"):
+        block = render.task_block(lang, d, names)
+        f = parse_block(block)
+        assert set(f) == set(render.BLOCK_ORDER), f"{lang}: {sorted(f)}"
+        assert f["title"] == "Devorlarni suvash"
+        assert f["assignee"] == "Rustam Ergashev"
+        assert f["location"] == "B blok · 8-qavat"
+        assert f["deadline"] == date.fromisoformat(D(3)).strftime("%d.%m.%Y")
+        assert f["priority"] == prio_label(lang, "high")
+
+
+def test_edit_block_has_a_copy_button_and_stays_within_telegram_limit():
+    d = {"title": "Devorlarni suvash", "priority": "normal", "planned_end": D(2)}
+    names = {"assignee": "Rustam Ergashev", "project": "TXT-07"}
+    block = render.task_block("uz", d, names)
+    assert len(block) <= render.COPY_LIMIT
+    kb = render.edit_block_kb("uz", block)
+    copy = [b for row in kb.inline_keyboard for b in row if getattr(b, "copy_text", None)]
+    assert copy and copy[0].copy_text.text == block, "nusxa olish tugmasi matnni bermayapti"
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+    assert "nt:fields" in datas and "nt:back" in datas
+    # juda uzun matnda Telegram nusxa tugmasini qabul qilmaydi - tugmasiz chiqishi kerak, xatosiz
+    long_kb = render.edit_block_kb("uz", "x" * (render.COPY_LIMIT + 1))
+    assert not [b for row in long_kb.inline_keyboard for b in row if getattr(b, "copy_text", None)]
+
+
+def test_parser_understands_edited_and_translated_field_names():
+    from main import parse_block, _prio_of, _is_empty
+    # tanish bo'lmagan satr yo'qolmaydi - oldingi maydonning davomi bo'lib qoladi
+    f = parse_block("Kimga: Rustam Ergashev\nСрок: 15.09.2026\nDescription: birinchi qavat\nnimadir: 5")
+    assert f == {"assignee": "Rustam Ergashev", "deadline": "15.09.2026",
+                 "description": "birinchi qavat nimadir: 5"}
+    # ko'p satrli tavsif bitta maydonda qoladi
+    assert parse_block("Sarlavha: Devor\nTavsif: birinchi satr\nikkinchi satr")["description"] == \
+        "birinchi satr ikkinchi satr"
+    # sarlavhada ikkinchi ikki nuqta bo'lsa ham kalit birinchisidan olinadi
+    assert parse_block("Sarlavha: Ogohlantirish: devor\nMuddat: 01.02.2026")["title"] == "Ogohlantirish: devor"
+    # oddiy gap blok emas - unda «Kalit: qiymat» yo'q
+    assert parse_block("Rustamga ertaga devor terishni ayting") == {}
+    assert parse_block("Ertaga: hammasi tayyor bo'lsin") == {}, "tanish bo'lmagan kalit blok ochmasligi kerak"
+    # bitta satr ham yetadi - modelga bormasdan darhol qo'llanadi
+    assert parse_block("Muddat: ertaga") == {"deadline": "ertaga"}
+    for word, code in (("Yuqori", "high"), ("shoshilinch", "high"), ("Средний", "normal"), ("Low", "low")):
+        assert _prio_of(word) == code, word
+    assert _prio_of("qizil") is None
+    assert _is_empty("—") and _is_empty("yo'q") and not _is_empty("B blok")
+
+
 def test_quiet_hours_helper():
     from main import _quiet_hours
     assert isinstance(_quiet_hours(), bool)

@@ -398,6 +398,75 @@ async def test_summary_is_gated_by_role(world):
     assert s.last == t("uz", "no_perm")
 
 
+# ---------------------------------------------------------------- «Tahrirlash»: matnni qo'lda tuzatish
+@pytest.mark.asyncio
+async def test_manager_edits_the_task_as_plain_text(world):
+    """«✏️ Tahrirlash» bosilganda vazifa oddiy matn bo'lib chiqadi. Rahbar uni nusxa olib,
+    xohlagan joyini o'zgartirib, oddiy xabar kabi yuboradi - va o'zgarishlar tushadi."""
+    mk = ctx_factory()
+    tg = world["tg"]["f_rahbar"]
+    u = await resolve(tg)
+    st = mk(tg)
+    worker = world["users"]["f_ishchi"]
+    qc = world["users"]["f_qc"]
+
+    await st.set_data({"project_id": world["project"]["id"], "project_name": world["project"]["name"],
+                       "assignee_id": worker["id"], "assignee_name": worker["full_name"],
+                       "reviewer_id": qc["id"], "reviewer_name": qc["full_name"],
+                       "type_id": world["type"]["id"], "type_name": world["type"]["name"],
+                       "title": "Eski sarlavha", "priority": "normal",
+                       "planned_start": D(0), "planned_end": D(5), "warnings": []})
+    await st.set_state(bot.NewTask.confirm)
+
+    # 1) Tahrirlash -> to'liq matn + nusxa olish tugmasi
+    s = Sent()
+    cb = FakeCb(s, "nt:edit", tg)
+    await bot.nt_edit_menu(cb, st, u, "uz")
+    shown = s.last
+    assert "Eski sarlavha" in shown and worker["full_name"] in shown
+    assert "<pre>" in shown, "matn nusxa olinadigan blok ichida chiqishi kerak"
+    copy = [b for m in s.markups if m for row in m.inline_keyboard for b in row if getattr(b, "copy_text", None)]
+    assert copy, "nusxa olish tugmasi yo'q"
+    assert await st.get_state() == bot.NewTask.edit_all.state
+
+    # 2) foydalanuvchi matnni tuzatib qaytaradi: sarlavha, muddat («ertaga»), muhimlik
+    edited = copy[0].copy_text.text \
+        .replace("Eski sarlavha", "Yangi sarlavha") \
+        .replace(f"Muddat: {(date.today() + timedelta(days=5)).strftime('%d.%m.%Y')}", "Muddat: ertaga") \
+        .replace("Muhimlik: O'rta", "Muhimlik: Yuqori")
+    s2 = Sent()
+    await bot.nt_edit_all(FakeMsg(s2, tg, text=edited), st, u, "uz")
+    d = await st.get_data()
+    assert d["title"] == "Yangi sarlavha"
+    assert d["planned_end"] == D(1), f"«ertaga» sana bo'lib tushmadi: {d['planned_end']}"
+    assert d["priority"] == "high"
+    assert d["assignee_id"] == worker["id"] and d["reviewer_id"] == qc["id"], "tegilmagan maydonlar o'zgardi"
+    assert "Yangi sarlavha" in s2.last and "nt:send" in s2.buttons()
+    assert await st.get_state() == bot.NewTask.confirm.state
+
+    # 3) noto'g'ri ism -> taxmin qilinmaydi, eskisi qoladi va ogohlantiriladi
+    bad = render.task_block("uz", await st.get_data(),
+                            {"assignee": worker["full_name"], "reviewer": qc["full_name"],
+                             "project": world["project"]["name"], "type": world["type"]["name"]}) \
+        .replace(f"Bajaruvchi: {worker['full_name']}", "Bajaruvchi: Qwerty Zxcvbn")
+    s3 = Sent()
+    await bot.confirm_text_edit(FakeMsg(s3, tg, text=bad), st, u, "uz")
+    d = await st.get_data()
+    assert d["assignee_id"] == worker["id"], "noma'lum ism bo'lsa eski bajaruvchi qolishi kerak"
+    assert any("Qwerty" in x for x in s3.texts), f"ogohlantirish chiqmadi: {s3.texts}"
+
+    # 4) bitta satr yuborilsa ham darhol tushadi (modelga bormasdan)
+    s4 = Sent()
+    await bot.confirm_text_edit(FakeMsg(s4, tg, text="Muddat: 15.11.2026"), st, u, "uz")
+    d = await st.get_data()
+    assert d["planned_end"] == "2026-11-15" and d["title"] == "Yangi sarlavha"
+
+    # 5) blok bo'lmagan oddiy sana eski yo'l bilan tushuniladi - buzilmasligi kerak
+    s5 = Sent()
+    await bot.nt_edit_all(FakeMsg(s5, tg, text="20.11.2026"), st, u, "uz")
+    assert (await st.get_data())["planned_end"] == "2026-11-20"
+
+
 # ---------------------------------------------------------------- superadmin botda: real "loyiha egasi" oqimi
 @pytest.mark.asyncio
 async def test_superadmin_bot_menu_has_no_dead_buttons(live_api, world):

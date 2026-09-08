@@ -11,6 +11,54 @@ PRIO = {
     "ru": {"low": "Низкий", "normal": "Средний", "high": "Высокий"},
     "en": {"low": "Low", "normal": "Normal", "high": "High"},
 }
+# «Tahrirlash» bloki: vazifa oddiy matn ko'rinishida chiqadi, foydalanuvchi xohlagan joyini
+# o'zgartirib qaytarib yuboradi. Kalitlar shu yerda - ular ham chiqarishda, ham o'qishda ishlatiladi.
+FIELDS = {
+    "uz": {"title": "Sarlavha", "assignee": "Bajaruvchi", "reviewer": "Tekshiruvchi", "project": "Loyiha",
+           "location": "Joy", "type": "Ish turi", "deadline": "Muddat", "priority": "Muhimlik", "description": "Tavsif"},
+    "ru": {"title": "Название", "assignee": "Исполнитель", "reviewer": "Проверяющий", "project": "Проект",
+           "location": "Место", "type": "Вид работ", "deadline": "Срок", "priority": "Приоритет", "description": "Описание"},
+    "en": {"title": "Title", "assignee": "Assignee", "reviewer": "Reviewer", "project": "Project",
+           "location": "Location", "type": "Work type", "deadline": "Deadline", "priority": "Priority", "description": "Description"},
+}
+# qo'shimcha nomlar - odam qaysi so'zni yozsa ham tushunilsin
+FIELD_EXTRA = {
+    "title": ["Nomi", "Vazifa", "Задача", "Task"],
+    "assignee": ["Kimga", "Kim bajaradi", "Ijrochi", "Кому", "Ответственный"],
+    "reviewer": ["Kim tekshiradi", "Nazoratchi", "Кто проверит", "Проверка", "Checker"],
+    "project": ["Obyekt", "Объект"],
+    "location": ["Manzil", "Joyi", "Qavat", "Участок", "Place"],
+    "type": ["Tur", "Ishturi", "Вид", "Тип", "Type"],
+    "deadline": ["Muddati", "Sana", "Tugash", "Дата", "Дедлайн", "Due", "Date"],
+    "priority": ["Muhimligi", "Muhimlilik", "Prioritet", "Важность", "Priority level"],
+    "description": ["Izoh", "Tafsilot", "Batafsil", "Комментарий", "Примечание", "Notes", "Comment"],
+}
+
+
+def _fkey(s: str) -> str:
+    """Maydon nomini solishtirish uchun soddalashtiradi: «📋 Ish turi » -> «ish turi»."""
+    s = "".join(ch for ch in (s or "").lower() if ch.isalnum() or ch.isspace() or ch in "'`’ʻ")
+    return " ".join(s.replace("'", "").replace("`", "").replace("’", "").replace("ʻ", "").split())
+
+
+FIELD_ALIASES = {}
+for _lang_fields in FIELDS.values():
+    for _f, _label in _lang_fields.items():
+        FIELD_ALIASES[_fkey(_label)] = _f
+for _f, _extra in FIELD_EXTRA.items():
+    for _label in _extra:
+        FIELD_ALIASES.setdefault(_fkey(_label), _f)
+
+
+def field_label(lang, f):
+    return FIELDS.get(lang, FIELDS["uz"]).get(f, f)
+
+
+def field_of(raw: str):
+    """«Bajaruvchi» / «Исполнитель» / «Kimga» -> "assignee". Tanimasa None."""
+    return FIELD_ALIASES.get(_fkey(raw))
+
+
 BLOCK = {
     "uz": {"material_yoq": "Material yo'q", "hujjat_kutilmoqda": "Hujjat kutilmoqda", "texnika_band": "Texnika band",
            "ishchi_yetmadi": "Ishchi yetmadi", "oldingi_ish": "Oldingi ish tugamagan", "obhavo": "Ob-havo",
@@ -92,7 +140,10 @@ T = {
         "e_title": "📋 Nomi", "e_assignee": "👤 Kimga", "e_deadline": "📅 Muddat", "e_project": "🏗 Loyiha", "e_prio": "⚡ Muhimlik", "e_loc": "📍 Joy", "e_type": "🔧 Ish turi", "e_desc": "📝 Tavsif", "e_reviewer": "🔍 Tekshiruvchi", "nt_reviewer": "🔍 Kim tekshiradi?",
         "edit_what": "Nimani o'zgartiramiz?",
         "e_title_ask": "Yangi nomni yozing:", "e_desc_ask": "Tavsifni yozing:",
-        "e_free": "✍️ Shunchaki yozing — men tushunaman:\n«muddat 15.09» · «Rustamga» · «sarlavha: devor terish» · «shoshilinch»\nYoki quyidagi tugmalardan tanlang:",
+        "e_block_head": "✍️ <b>Vazifa matni.</b> Nusxa oling, xohlagan joyingizni o'zgartiring va menga qaytarib yuboring:",
+        "e_block_tip": "\n\n👆 Matnni bosib nusxa oling → pastdagi yozuv maydoniga qo'ying → tuzating → yuboring.",
+        "e_copy": "📋 Nusxa olish", "e_buttons": "🔘 Tugmalar bilan",
+        "e_nf": "⚠️ «{field}: {value}» — tushunmadim, eskisi qoldi.",
         "e_title_now": "Hozirgi nom: «{cur}»\nYangisini yozing:",
         "created": "✅ Vazifa yaratildi: <b>{code}</b>\n{title}\n👤 {assignee} · 📅 {end}\nBajaruvchiga xabar yuborildi.",
         "no_project_warn": "\n⚠️ Loyiha aniqlanmadi — tanlang.",
@@ -214,7 +265,10 @@ T = {
         "e_title": "📋 Название", "e_assignee": "👤 Кому", "e_deadline": "📅 Срок", "e_project": "🏗 Проект", "e_prio": "⚡ Приоритет", "e_loc": "📍 Место", "e_type": "🔧 Вид работ", "e_desc": "📝 Описание", "e_reviewer": "🔍 Проверяющий", "nt_reviewer": "🔍 Кто проверит?",
         "edit_what": "Что изменить?",
         "e_title_ask": "Введите новое название:", "e_desc_ask": "Введите описание:",
-        "e_free": "✍️ Просто напишите — я пойму:\n«срок 15.09» · «Рустаму» · «название: кладка стен» · «срочно»\nИли выберите кнопку ниже:",
+        "e_block_head": "✍️ <b>Текст задачи.</b> Скопируйте, измените что нужно и отправьте мне обратно:",
+        "e_block_tip": "\n\n👆 Нажмите на текст, чтобы скопировать → вставьте в поле ввода → исправьте → отправьте.",
+        "e_copy": "📋 Скопировать", "e_buttons": "🔘 Кнопками",
+        "e_nf": "⚠️ «{field}: {value}» — не понял, оставил прежнее.",
         "e_title_now": "Сейчас: «{cur}»\nВведите новое название:",
         "created": "✅ Задача создана: <b>{code}</b>\n{title}\n👤 {assignee} · 📅 {end}\nИсполнитель уведомлён.",
         "no_project_warn": "\n⚠️ Проект не определён — выберите.",
@@ -335,7 +389,10 @@ T = {
         "e_title": "📋 Title", "e_assignee": "👤 Assignee", "e_deadline": "📅 Deadline", "e_project": "🏗 Project", "e_prio": "⚡ Priority", "e_loc": "📍 Location", "e_type": "🔧 Work type", "e_desc": "📝 Description", "e_reviewer": "🔍 Reviewer", "nt_reviewer": "🔍 Who reviews?",
         "edit_what": "What to change?",
         "e_title_ask": "Type the new title:", "e_desc_ask": "Type the description:",
-        "e_free": "✍️ Just type it — I understand:\n\u00abdue 15.09\u00bb \u00b7 \u00abto Rustam\u00bb \u00b7 \u00abtitle: wall laying\u00bb \u00b7 \u00aburgent\u00bb\nOr pick a button below:",
+        "e_block_head": "✍️ <b>Task text.</b> Copy it, change anything you want and send it back to me:",
+        "e_block_tip": "\n\n👆 Tap the text to copy → paste it into the input box → edit → send.",
+        "e_copy": "📋 Copy", "e_buttons": "🔘 Use buttons",
+        "e_nf": "⚠️ \u00ab{field}: {value}\u00bb — didn't understand, kept the old value.",
         "e_title_now": "Current: \u00ab{cur}\u00bb\nType the new title:",
         "created": "✅ Task created: <b>{code}</b>\n{title}\n👤 {assignee} · 📅 {end}\nAssignee notified.",
         "no_project_warn": "\n⚠️ Project not detected — choose one.",
