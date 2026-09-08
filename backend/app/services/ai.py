@@ -31,10 +31,23 @@ LANG_HINT = {"uz": "O'zbek tilida (lotin), ruscha va inglizcha so'zlar aralash b
              "en": "English, may contain Uzbek and Russian words. Construction terms."}
 
 
-def transcribe(audio: bytes, filename: str, lang: str = "uz") -> str:
+def transcribe(audio: bytes, filename: str, lang: str = "uz", vocab: Optional[list[str]] = None) -> str:
+    """Ovozni matnga o'giradi. `vocab` - bazadagi haqiqiy ism, obyekt va ish turlari:
+    ular prompt'ga qo'shilsa model o'zbekcha ismlarni ancha to'g'ri eshitadi
+    ("Akmal Sobirov" ni "Komil Sabirov" deb yozib qo'ymaydi)."""
+    hint = LANG_HINT.get(lang, LANG_HINT["uz"])
+    if vocab:
+        # OpenAI prompt ~224 token bilan cheklangan - eng kerakli so'zlarni sig'diramiz
+        words, total = [], 0
+        for w in vocab:
+            if total + len(w) > 700:
+                break
+            words.append(w)
+            total += len(w) + 2
+        if words:
+            hint += " Nomlar: " + ", ".join(words) + "."
     files = {"file": (filename, audio, "application/octet-stream")}
-    data = {"model": settings.OPENAI_STT_MODEL, "prompt": LANG_HINT.get(lang, LANG_HINT["uz"]),
-            "response_format": "json"}
+    data = {"model": settings.OPENAI_STT_MODEL, "prompt": hint, "response_format": "json"}
     if settings.OPENAI_STT_MODEL.startswith("whisper") and lang in ("uz", "ru", "en"):
         data["language"] = lang
     with httpx.Client(timeout=90) as c:
@@ -45,25 +58,57 @@ def transcribe(audio: bytes, filename: str, lang: str = "uz") -> str:
 
 
 SYSTEM = """You extract a construction task from a manager's spoken instruction.
+
+You are given the REAL lists of projects, work types and people from the database.
+Pick from those lists by id - never invent an item that is not listed. If nothing in a
+list clearly matches what was said, return null for that field (do NOT guess a close-looking one).
+
 Return ONLY JSON with keys:
-title (short imperative task title in the SAME language as the instruction, max 120 chars),
+title (short task title in the SAME language as the instruction, max 120 chars; what must be done, not who),
 description (details not captured elsewhere, or null),
-priority ("low"|"normal"|"high"; urgent/srochno/tez -> high),
-planned_end (ISO date YYYY-MM-DD or null; resolve relative dates using TODAY; "oktabrgacha"/"до октября" = last day of September? NO: "until October" means 2026-10-01 is deadline start; use the LAST day of the named month when a month is named without a day, e.g. "oktabrgacha" -> YYYY-10-31 unless user says "oktabr boshigacha" then YYYY-10-01),
+priority ("low"|"normal"|"high"; only if urgency was actually said: shoshilinch/tezda/srochno/urgent -> high; otherwise "normal"),
+planned_end (ISO date YYYY-MM-DD or null),
 planned_start (ISO date or null; default null),
-assignee_name (the person's name as heard, or null),
+project_id (integer id from PROJECTS, or null),
+type_id (integer id from WORK TYPES, or null),
+assignee_name (the person's name exactly as written in PEOPLE if it clearly matches what was heard, otherwise the name as heard, or null),
 location_name (block/floor/zone words as heard, or null),
-project_name (project/object name if said, or null),
-work_type (type of work as heard, or null),
 quantity (number or null), unit (m3/m2/m/t/dona or null).
-Never invent names. Keep title concise: what must be done, not who."""
+
+DEADLINES - resolve against TODAY, always return a real date:
+  "bugun"/"сегодня"/"today" -> TODAY
+  "ertaga"/"завтра"/"tomorrow" (also "ertaga kechgacha", "ertaga kechqurun", "ertagagacha") -> TODAY+1
+  "indinga"/"послезавтра" -> TODAY+2
+  "bu hafta"/"shu hafta oxirigacha" -> the coming Saturday
+  "keyingi hafta" -> TODAY+7
+  a weekday name ("jumagacha", "до пятницы") -> the next occurrence of that weekday
+  "N kun(da/ichida)" -> TODAY+N
+  a month named without a day ("oktabrgacha") -> the LAST day of that month; "oktabr boshigacha" -> the 1st.
+The system stores dates only (no clock time), so "kechgacha"/"kechqurun"/"soat 12 gacha"
+does not change the date - it still means that same day."""
 
 
-def llm_extract(text: str, today: date, lang: str) -> dict:
+def build_context(db: Session, creator: User) -> tuple[str, list[str]]:
+    """Modelga beriladigan haqiqiy ro'yxatlar + ovoz tanishi uchun lug'at."""
+    projects = [p for p in db.scalars(select(Project).where(Project.is_active == True))  # noqa
+                if user_in_project(creator, p.id, db)]
+    types = db.scalars(select(TaskType).where(TaskType.is_active == True)).all()  # noqa
+    people = [u for u in db.scalars(select(User).where(User.is_active == True))  # noqa
+              if "tasks.start" in (u.role.permissions_json or []) and u.id != creator.id]
+    lines = ["PROJECTS:"] + [f"  {p.id} = {p.name}" for p in projects[:40]]
+    lines += ["WORK TYPES:"] + [f"  {t.id} = {t.name}" for t in types[:40]]
+    lines += ["PEOPLE:"] + [f"  {u.full_name}" for u in people[:60]]
+    vocab = [p.name for p in projects[:15]] + [t.name for t in types[:12]] + [u.full_name for u in people[:40]]
+    return "\n".join(lines), vocab
+
+
+def llm_extract(text: str, today: date, lang: str, context: str = "") -> dict:
+    user = (f"TODAY={today.isoformat()} (weekday {today.strftime('%A')}). UI language={lang}.\n"
+            f"{context}\n\nInstruction: {text}")
     body = {"model": settings.OPENAI_LLM_MODEL, "temperature": 0,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": SYSTEM},
-                         {"role": "user", "content": f"TODAY={today.isoformat()} (weekday {today.strftime('%A')}). UI language={lang}.\nInstruction: {text}"}]}
+                         {"role": "user", "content": user}]}
     with httpx.Client(timeout=60) as c:
         r = c.post(f"{OPENAI}/chat/completions", headers={**_headers(), "Content-Type": "application/json"}, json=body)
     if r.status_code >= 400:
@@ -180,7 +225,8 @@ def parse_task(db: Session, creator: User, text: str, project_id: Optional[int],
     if not settings.OPENAI_API_KEY:
         raise ApiError(503, "VOICE_NOT_CONFIGURED", "Ovozli/matnli tahlil sozlanmagan (OPENAI_API_KEY yo'q).")
     today = date.today()
-    data = llm_extract(text, today, lang)
+    context, _ = build_context(db, creator)
+    data = llm_extract(text, today, lang, context)
     out = ParsedTask(transcript=text, title=(data.get("title") or text[:120]).strip(),
                      description=data.get("description"), priority=data.get("priority") if data.get("priority") in ("low", "normal", "high") else "normal")
     # dates
@@ -197,9 +243,15 @@ def parse_task(db: Session, creator: User, text: str, project_id: Optional[int],
         out.warnings.append("no_deadline")
     if out.planned_end < out.planned_start:
         out.planned_start = out.planned_end
-    # project
+    # project - avval model ro'yxatdan tanlagan id, keyin nomi bo'yicha, keyin bitta bo'lsa o'zi
     projects = [p for p in db.scalars(select(Project).where(Project.is_active == True)) if user_in_project(creator, p.id, db)]  # noqa
-    pid = project_id or match_one(db, data.get("project_name"), projects) or (projects[0].id if len(projects) == 1 else None)
+    allowed_p = {p.id for p in projects}
+    picked_p = data.get("project_id") if data.get("project_id") in allowed_p else None
+    pid = (project_id or picked_p
+           or match_one(db, data.get("project_name"), projects, threshold=75)
+           # model nom bermagan bo'lsa - butun matndan qidiramiz ("Brilliant City'da" kabi)
+           or match_one(db, text, projects, threshold=88)
+           or (projects[0].id if len(projects) == 1 else None))
     if pid:
         p = db.get(Project, pid)
         out.project_id, out.project_name = p.id, p.name
@@ -212,11 +264,16 @@ def parse_task(db: Session, creator: User, text: str, project_id: Optional[int],
         if lid:
             loc = db.get(Location, lid)
             out.location_id, out.location_name = loc.id, loc.name
-    # type
+    # ish turi - model tanlagani ustun. Fuzzy chegara yuqori: "fasad ishlari" ni
+    # "beton ishlari" ga o'xshatib yuborgandan ko'ra umumiy turni qo'ygan afzal.
     types = db.scalars(select(TaskType).where(TaskType.is_active == True)).all()  # noqa
-    tid = match_one(db, data.get("work_type") or out.title, types, threshold=60)
+    allowed_t = {t.id for t in types}
+    tid = data.get("type_id") if data.get("type_id") in allowed_t else None
+    if not tid:
+        tid = match_one(db, data.get("work_type"), types, threshold=82) or match_one(db, out.title, types, threshold=82)
     if not tid and types:
         tid = next((t.id for t in types if (t.group_name or "").lower() in ("umumiy", "general", "общие")), types[0].id)
+        out.warnings.append("type_guessed")
     if tid:
         tt = db.get(TaskType, tid)
         out.type_id, out.type_name = tt.id, tt.name

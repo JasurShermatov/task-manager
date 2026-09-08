@@ -101,3 +101,38 @@ def test_parsed_task_can_actually_be_created(users, world, client):
         "assignee_id": assignee_id, "reviewer_id": reviewer_id,
         "planned_start": str(date.today()), "planned_end": str(date.today() + timedelta(days=3))})
     assert r.status_code == 201, r.text
+
+
+def test_context_gives_the_model_the_real_lists(users, world):
+    """Model taxmin qilmasligi uchun unga bazadagi haqiqiy loyiha/ish turi/xodim ro'yxati beriladi."""
+    db = _db()
+    try:
+        creator = db.scalar(select(User).where(User.login == "rahbar"))
+        ctx, vocab = ai.build_context(db, creator)
+        assert "PROJECTS:" in ctx and "WORK TYPES:" in ctx and "PEOPLE:" in ctx
+        assert world["project"]["name"] in ctx, "loyiha ro'yxatda yo'q"
+        assert "Rustam Ergashev" in ctx, "xodim ro'yxatda yo'q"
+        # tekshiruvchi bajaruvchi ro'yxatiga tushmasligi kerak
+        people = ctx.split("PEOPLE:")[1]
+        assert "Doniyor Toshmatov" not in people
+        # ovoz tanish uchun lug'at ham to'ldiriladi
+        assert "Rustam Ergashev" in vocab and world["project"]["name"] in vocab
+    finally:
+        db.close()
+
+
+def test_work_type_is_not_guessed_wrongly(users, world):
+    """«Fasad ishlari» deyilsa «Beton ishlari» ga o'xshatib yubormasligi kerak.
+    Chegara past bo'lganda aynan shunday xato bo'lgan edi."""
+    from app.models import TaskType
+    db = _db()
+    try:
+        types = db.scalars(select(TaskType)).all()
+        names = {t_.name for t_ in types}
+        if {"Fasad ishlari", "Beton ishlari"} <= names:
+            tid = ai.match_one(db, "fasad ishlari", types, threshold=82)
+            assert tid and db.get(TaskType, tid).name == "Fasad ishlari"
+        # umuman boshqa gap - hech qanday turga o'xshamaydi, None qaytishi kerak
+        assert ai.match_one(db, "ertaga kechgacha topshiring", types, threshold=82) is None
+    finally:
+        db.close()

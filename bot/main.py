@@ -1002,7 +1002,9 @@ async def nt_back(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
 
 @router.callback_query(F.data == "nt:edit")
 async def nt_edit_menu(cb: CallbackQuery, state: FSMContext, lang: str):
+    # Tugmalar qoladi, lekin asosiysi - shunchaki yozib tuzatish mumkinligini aytamiz
     await cb.message.edit_reply_markup(reply_markup=edit_menu_kb(lang))
+    await cb.message.answer(t(lang, "e_free"))
     await cb.answer()
 
 
@@ -1014,7 +1016,10 @@ async def nt_edit_field(cb: CallbackQuery, state: FSMContext, u: dict, lang: str
     uid = u["id"]
     if field == "title":
         await state.set_state(NewTask.edit_title)
-        await cb.message.answer(t(lang, "e_title_ask"), reply_markup=cancel_kb(lang))
+        d = await state.get_data()
+        cur = (d.get("title") or "").strip()
+        ask = t(lang, "e_title_now", cur=cur) if cur else t(lang, "e_title_ask")
+        await cb.message.answer(ask, reply_markup=cancel_kb(lang))
     elif field == "desc":
         await state.set_state(NewTask.edit_desc)
         await cb.message.answer(t(lang, "e_desc_ask"), reply_markup=cancel_kb(lang))
