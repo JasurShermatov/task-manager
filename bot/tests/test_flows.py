@@ -466,6 +466,17 @@ async def test_manager_edits_the_task_as_plain_text(world):
     await bot.nt_edit_all(FakeMsg(s5, tg, text="20.11.2026"), st, u, "uz")
     assert (await st.get_data())["planned_end"] == "2026-11-20"
 
+    # 6) va eng muhimi: tahrirlangan vazifa haqiqatan serverga o'sha ko'rinishda tushadi
+    from api import api
+    s6 = Sent()
+    await bot.nt_send(FakeCb(s6, "nt:send", tg), st, u, "uz")
+    code = next(w for x in s6.texts if "V-" in x
+                for w in x.replace("<b>", " ").replace("</b>", " ").split() if w.startswith("V-"))
+    tk = await api.task_by_code(u["id"], code)
+    assert tk["title"] == "Yangi sarlavha" and tk["priority"] == "high"
+    assert tk["planned_end"] == "2026-11-20" and tk["assignee_id"] == worker["id"]
+    assert tk["reviewer_id"] == qc["id"]
+
 
 # ---------------------------------------------------------------- superadmin botda: real "loyiha egasi" oqimi
 @pytest.mark.asyncio
