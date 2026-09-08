@@ -13,6 +13,10 @@ function Item({ to, title, sub, end }: { to: string; title: string; sub: string;
   )
 }
 
+/** Yon menyu holati - burger tugmasi sarlavha qatorining ichida turishi uchun kerak
+ *  (ilgari u absolute bo'lib sahifa nomi ustiga chiqib qolar edi). */
+const SideCtx = React.createContext<{ open: boolean; setOpen: (v: boolean) => void }>({ open: false, setOpen: () => {} })
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { me, logout, can } = useAuth()
   const { t, lang, setLang } = useT()
@@ -23,7 +27,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     try { await patch(`/users/${u.id}`, { lang: l }) } catch {}
   }
   return (
+    <SideCtx.Provider value={{ open, setOpen }}>
     <div className="app">
+      {open && <div className="side-back" onClick={() => setOpen(false)} />}
       <aside className={'side' + (open ? ' open' : '')} onClick={() => setOpen(false)}>
         <div className="side__brand">
           <div className="side__logo">SAFF<i /></div>
@@ -56,28 +62,29 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <main className="main">
-        <div style={{ position: 'absolute', top: 14, left: 12 }}>
-          <button className="icon-btn burger" onClick={() => setOpen(true)}>☰</button>
-        </div>
         {children}
       </main>
     </div>
+    </SideCtx.Provider>
   )
 }
 
 export function PageHeader({ title, children, extra }: { title: string; children?: React.ReactNode; extra?: React.ReactNode }) {
   const { me, can } = useAuth()
   const { t } = useT()
+  const { setOpen } = React.useContext(SideCtx)
   const viewOnly = !can('tasks.create') && !can('tasks.start')
   return (
     <div className="top">
-      <h1>{title}</h1>
-      {extra}
-      {viewOnly && <span className="chip chip--warn">{t('perm_view_only')}</span>}
-      <div className="top__right">
-        {children}
-        <NotifBell />
+      <div className="top__title">
+        <button className="icon-btn burger" onClick={() => setOpen(true)} aria-label="Menyu">☰</button>
+        <h1>{title}</h1>
+        {viewOnly && <span className="chip chip--warn">{t('perm_view_only')}</span>}
       </div>
+      {extra && <div className="top__extra">{extra}</div>}
+      <div className="top__right">{children}</div>
+      {/* qo'ng'iroq alohida - telefonda sarlavha qatoriga chiqadi, laptopda eng o'ngda qoladi */}
+      <NotifBell />
     </div>
   )
 }
@@ -95,7 +102,7 @@ export function NotifBell() {
     if (n.task_id) nav(`/tasks/${n.task_id}`)
   }
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="notif-wrap">
       <button className="icon-btn" onClick={() => setOpen(o => !o)} title={t('notif')}>🔔{!!cnt?.count && <span className="badge">{cnt.count}</span>}</button>
       {open && <div className="notif-back" onClick={() => setOpen(false)} />}
       {open && (

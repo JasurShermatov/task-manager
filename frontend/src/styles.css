@@ -60,7 +60,9 @@ button { cursor: pointer; }
 
 .main { min-width: 0; max-width: 100%; display: flex; flex-direction: column; overflow-x: hidden; }
 .top { display: flex; align-items: center; gap: 14px; padding: 22px 32px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.top h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.top__title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.top__extra { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.top h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; min-width: 0; }
 .chip { font-family: var(--fm); font-size: 11px; color: var(--muted); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 8px; background: var(--bg); }
 .chip--warn { color: #b8860b; border-color: #e5b84a; background: #fff8e6; }
 .content { padding: 20px 32px 40px; }
@@ -71,7 +73,11 @@ button { cursor: pointer; }
 .inp--sm, .sel--sm { min-height: 30px; padding: 4px 9px; font-size: 12px; }
 .sel { appearance: none; padding-right: 26px; background-image: linear-gradient(45deg, transparent 50%, #555 50%), linear-gradient(135deg, #555 50%, transparent 50%); background-position: calc(100% - 13px) 55%, calc(100% - 8px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
 textarea.inp { min-height: 80px; resize: vertical; }
-.lbl { display: flex; flex-direction: column; gap: 5px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+/* blok - shunda "*" belgisi matn yonida qoladi (flex-column da u alohida qatorga tushardi) */
+.lbl { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.lbl > .inp, .lbl > .sel, .lbl > textarea { display: block; width: 100%; margin-top: 5px; }
+.lbl > .row, .lbl > .cells, .lbl > .seg { margin-top: 5px; }
+.lbl > .hint, .lbl > .field-err { display: block; margin-top: 4px; }
 .lbl > .inp, .lbl > .sel { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text); }
 .lbl i { color: var(--accent); font-style: normal; }
 .field-err { color: var(--block); font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 500; }
@@ -91,7 +97,7 @@ textarea.inp { min-height: 80px; resize: vertical; }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(248,81,73,.4);} 50% { box-shadow: 0 0 0 8px rgba(248,81,73,0);} }
 
 /* ---- KPI ---- */
-.kpis { display: grid; grid-template-columns: repeat(5, 1fr); border-bottom: 1px solid var(--line); }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
 .kpi { padding: 16px 24px; border-right: 1px solid var(--line); cursor: pointer; transition: background .12s; }
 .kpi:last-child { border-right: 0; }
 .kpi:hover { background: var(--bg-2); }
@@ -229,6 +235,8 @@ textarea.inp { min-height: 80px; resize: vertical; }
 .top__right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap;
   justify-content: flex-end; min-width: 0; }
 .top__right > * { flex: 0 0 auto; }
+.top__search { min-width: 200px; }
+.notif-wrap { position: relative; flex: none; }
 .top__right .inp { flex: 1 1 150px; min-width: 120px; max-width: 260px; }
 .notif-item { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: pointer; }
 .notif-item.unread { background: #fff8f7; }
@@ -254,20 +262,137 @@ textarea.inp { min-height: 80px; resize: vertical; }
 .perm-grid > div.c { text-align: center; cursor: pointer; }
 .perm-grid > div.c:hover { background: var(--bg-2); }
 
-@media (max-width: 1100px) { .board { grid-template-columns: repeat(5, 240px); } .kpis { grid-template-columns: repeat(3, 1fr); } .kpi { border-bottom: 1px solid var(--line); } }
+@media (max-width: 1100px) { .board { grid-template-columns: repeat(5, 240px); } .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpi { border-bottom: 1px solid var(--line); } }
+
+.burger { display: none; }
+.side-back { display: none; }
+
+/* ============================================================================
+   PLANSHET VA TELEFON
+   Qoida: laptop ko'rinishi o'zgarmaydi - bu yerdagi hamma narsa faqat tor
+   ekranlarda ishlaydi. Barmoq uchun 44px, iOS zoom bo'lmasligi uchun 16px shrift.
+   ============================================================================ */
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
-  .side { position: fixed; left: -260px; width: 248px; transition: left .2s; z-index: 60; }
+
+  /* --- yon menyu: chetdan chiqadi, orqasida qorong'i fon --- */
+  .side { position: fixed; left: -280px; width: min(280px, 86vw); transition: left .22s ease;
+    z-index: 60; box-shadow: 0 0 40px rgba(0,0,0,.3); padding-bottom: env(safe-area-inset-bottom); }
   .side.open { left: 0; }
-  .burger { display: inline-grid !important; }
-  .top, .bar, .content, .tabs { padding-left: 16px; padding-right: 16px; }
-  .board { padding: 12px 16px; grid-template-columns: repeat(5, 240px); }
-  .modal__b { grid-template-columns: 1fr; }
-  .grid2, .grid3 { grid-template-columns: 1fr; }
+  .side-back { display: block; position: fixed; inset: 0; background: rgba(11,11,12,.45);
+    z-index: 55; animation: fade .18s ease-out; }
+  @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+  .burger { display: inline-grid !important; flex: none; }
+
+  /* --- sarlavha qatori: burger + nom bir qatorda, boshqaruvlar pastda --- */
+  .top { padding: 12px 16px; gap: 10px; align-items: flex-start; }
+  /* 1-qator: burger + nom + qo'ng'iroq | 2-qator: qo'shimcha | 3-qator: boshqaruvlar */
+  .top__title { flex: 1 1 auto; min-width: 0; gap: 10px; }
+  .top h1 { font-size: 19px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top__extra { width: 100%; order: 3; }
+  .top__extra > .sel, .top__extra > .inp { flex: 1 1 auto; max-width: none; }
+  .top__right { width: 100%; margin-left: 0; justify-content: flex-start; gap: 8px; order: 4; }
+  .top__right .inp { flex: 1 1 auto; max-width: none; }
+  .top__search { min-width: 0; flex: 1 1 130px; }
+  /* qo'ng'iroq sarlavha bilan bir qatorda, o'ng chetda */
+  .top > .notif-wrap { order: 2; }
+  .kpi:last-child:nth-child(odd) { grid-column: span 2; }
+
+  .bar, .content, .tabs { padding-left: 16px; padding-right: 16px; }
+  .content { padding-top: 14px; padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+
+  /* --- barmoqqa qulay o'lchamlar + iOS ning avtomatik kattalashtirishini to'xtatish --- */
+  .btn, .icon-btn { min-height: 44px; }
+  .btn--sm { min-height: 38px; padding: 6px 12px; }
+  .seg button { min-height: 38px; padding: 8px 16px; font-size: 13px; }
+  .tog { min-height: 38px; padding: 8px 12px; font-size: 13px; }
+  .tab { padding: 14px 0; }
+  .icon-btn { width: 44px; height: 44px; }
+  .inp, .sel { min-height: 44px; font-size: 16px; }
+  .inp--sm, .sel--sm { min-height: 38px; font-size: 16px; padding: 6px 10px; }
+  .sel { padding-right: 30px; }
+
+  /* --- KPI: 2 ustun, raqamlar kichrayadi --- */
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi { padding: 12px 14px; border-right: 1px solid var(--line); }
+  .kpi:nth-child(2n) { border-right: 0; }
+  .kpi strong { font-size: 26px; }
+  .kpi span { font-size: 12px; margin-top: 5px; }
+  .kpi small { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* --- filtrlar: bitta qatorda yonma-yon suriladi (uch qator bo'lib ketmasin) --- */
+  .bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 8px;
+    padding-top: 10px; padding-bottom: 10px; -webkit-overflow-scrolling: touch; }
+  .bar::-webkit-scrollbar { display: none; }
+  .bar > * { flex: 0 0 auto; }
+  .bar .sel, .bar .inp { max-width: 46vw; }
+
+  .tabs { gap: 16px; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { white-space: nowrap; }
+
+  /* --- doska: bitta ustun ekranga to'liq sig'adi, surganda qulflanadi --- */
+  .board { padding: 12px 16px calc(28px + env(safe-area-inset-bottom));
+    grid-auto-flow: column; grid-auto-columns: min(82vw, 320px); grid-template-columns: none;
+    scroll-snap-type: x mandatory; scroll-padding-left: 16px; overscroll-behavior-x: contain; }
+  .col { scroll-snap-align: start; }
+
+  .modal__b, .grid2, .grid3 { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 90px 1fr; }
-  .btn { min-height: 44px; }
+  .thumbs { grid-template-columns: repeat(3, 1fr); }
+
+  /* --- modal: pastdan chiqadigan varaq --- */
+  .modal-bg { padding: 0; align-items: end; }
+  .modal { max-width: none; max-height: 94vh; border-radius: 14px 14px 0 0; }
+  .modal__h { padding: 14px 16px; position: sticky; top: 0; background: #fff; z-index: 2; border-radius: 14px 14px 0 0; }
+  .modal__b { padding: 14px 16px; }
+  .modal__f { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-radius: 0;
+    position: sticky; bottom: 0; }
+  .modal__f .btn { flex: 1; justify-content: center; }
+
+  /* --- vazifa paneli (drawer) --- */
+  .drawer { width: 100vw; }
+  .drawer__h, .drawer__b { padding-left: 16px; padding-right: 16px; }
+  .drawer__f { padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+  .drawer__f .btn { flex: 1 1 auto; justify-content: center; }
+
+  /* --- hisobot / matritsa: kesilmasin --- */
+  .hbar { grid-template-columns: 110px 1fr 36px; gap: 8px; font-size: 12px; }
+  .perm-grid { min-width: 620px; }
+  .toast-wrap { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .toast { max-width: none; }
+  .login__box { width: min(360px, calc(100vw - 32px)); }
 }
-.burger { display: none; }
+
+/* --- telefon (kichik ekran) --- */
+@media (max-width: 560px) {
+  .top { padding: 10px 12px; }
+  .bar, .content, .tabs { padding-left: 12px; padding-right: 12px; }
+  .board { padding-left: 12px; padding-right: 12px; scroll-padding-left: 12px;
+    grid-auto-columns: min(86vw, 300px); }
+  .top h1 { font-size: 17px; }
+
+  /* tarix: sana matn ustida turadi, yonida emas */
+  .hist { flex-direction: column; gap: 2px; }
+  .hist time { width: auto; }
+
+  .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .kv dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .kv dd { margin-bottom: 8px; }
+
+  .hbar { grid-template-columns: 1fr; gap: 3px; }
+  .hbar em { text-align: left; }
+  .thumbs { grid-template-columns: repeat(2, 1fr); }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stats b { font-size: 20px; }
+  .split__list { max-height: none; overflow: visible; }
+  .drawer__h h2 { font-size: 17px; }
+  .voice-box .txt { min-width: 0; }
+  .notif-pop { width: calc(100vw - 24px); }
+}
+
+/* Uzun so'z yoki kod qatorlari qutidan chiqib ketmasin */
+.card__t, .drawer__h h2, .cmt, .alert, .person__t b, .site__name { overflow-wrap: anywhere; }
 
 
 /* ---- ikki ustunli sahifalar (Xodimlar, Loyihalar) ---- */

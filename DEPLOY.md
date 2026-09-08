@@ -48,6 +48,13 @@ nano .env
 
 ## 4. Ko'tarish
 
+> **Avval portni tekshiring.** Serverda boshqa loyiha ishlab turgan bo'lishi mumkin:
+> ```bash
+> ss -tlnp | grep -E ':(80|8080)\s'
+> ```
+> 80-port band bo'lsa `.env` da `WEB_PORT=8080` qiling va `PUBLIC_URL` ga ham portni qo'shing:
+> `PUBLIC_URL=http://SERVER_IP:8080`
+
 ```bash
 cd /opt/saff
 docker compose -f docker-compose.prod.yml up -d --build
@@ -70,6 +77,8 @@ Faqat 22 (SSH) va 80 (web) portlar ochiq bo'lsin:
 
 ```bash
 ufw allow 22/tcp && ufw allow 80/tcp && ufw --force enable
+# WEB_PORT ni o'zgartirgan bo'lsangiz o'shani oching:
+# ufw allow 8080/tcp
 ufw status
 ```
 
@@ -158,6 +167,36 @@ docker run --rm -v saff_uploads:/data -v ~:/backup alpine \
 ```
 
 ---
+
+## Bir serverda ikkinchi loyiha bo'lsa
+
+Agar serverda allaqachon nginx 80/443 ni band qilgan boshqa loyiha ishlab tursa, ikki yo'l bor:
+
+**Hozir (tez):** `.env` da `WEB_PORT=8080` — sayt `http://SERVER_IP:8080` da ochiladi.
+Ikkala loyiha bir-biriga tegmaydi.
+
+**Domen kelganda (to'g'ri yo'l):** eski nginx'ga bitta server bloki qo'shiladi va u bizning
+konteynerga uzatadi — shunda 8080 kerak emas, sertifikat ham eski certbot orqali oladi:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name vazifa.saff.uz;
+    ssl_certificate     /etc/letsencrypt/live/saff.uz/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/saff.uz/privkey.pem;
+    client_max_body_size 60m;
+    location / {
+        proxy_pass http://127.0.0.1:8080;      # WEB_PORT
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+    }
+}
+```
+
+Keyin `.env` da `PUBLIC_URL=https://vazifa.saff.uz` va `docker compose -f docker-compose.prod.yml up -d api bot`.
 
 ## Domen ulanganda (1-2 kundan keyin)
 

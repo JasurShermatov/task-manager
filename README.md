@@ -183,23 +183,34 @@ Ertalabki 08:00 xulosa, muddat eslatmalari va barcha bildirishnomalar ham shu ye
 **prorabi, loyiha rahbari, tekshiruvchisi va superadmin** darhol xabar oladi: hajm, ishchi soni,
 izoh va jamlanma («156 / 240 m3»). Xabar Telegramga ham, web'dagi qo'ng'iroqqa ham tushadi.
 
-**Ovoz bilan vazifa berish** (rahbar/prorab, `OPENAI_API_KEY` kerak):
+**Ovoz bilan vazifa berish** (rahbar/prorab/admin, `OPENAI_API_KEY` kerak):
 
-1. Rahbar botga ovozli xabar yuboradi.
-2. Ovoz matnga o'tadi (`gpt-4o-transcribe`), keyin LLM undan tuzilgan vazifa chiqaradi — sarlavha, muddat,
-   muhimlik, joy va **eshitilgan ism**.
+1. Botga **oddiy ovozli xabar** yuboriladi — hech narsani oldindan tanlash shart emas,
+   vazifa ustiga bosish ham kerak emas. Shunchaki gapirasiz:
+   «Rustam Ergashevga B blok 5-qavatda devor terishni jumagacha topshir, shoshilinch».
+2. Ovoz matnga o'tadi (`gpt-4o-transcribe`), keyin LLM undan tuzilgan vazifa chiqaradi — sarlavha,
+   muddat, muhimlik, joy, ish turi va **eshitilgan ism**.
 3. Ism serverda **fuzzy** solishtiriladi (`rapidfuzz`, o'zbekcha translit farqlari hisobga olinadi:
-   «Rustam Erkashev» → «Rustam Ergashev»). Bitta nomzod ≥85% va ikkinchisidan ≥10 ball yuqori bo'lsa —
-   avtomatik tanlanadi; aks holda kartochkada **nomzod tugmalari** chiqadi.
-4. Bot tasdiqlash kartochkasini ko'rsatadi: `✅ Yuborish` · `✏️ Tahrirlash` · `❌ Bekor`.
+   «Rustam Erkashev» → «Rustam Ergashev», 95%). Bitta nomzod ≥85% va ikkinchisidan ≥10 ball
+   yuqori bo'lsa — avtomatik tanlanadi.
+4. **Bir xil ismli ikki odam bo'lsa** hech qachon avtomatik tanlanmaydi — kartochkada nomzod
+   tugmalari chiqadi va ular bir-biridan ajralib turadi: rol, obyekt/blok, kerak bo'lsa telefon
+   oxirgi 4 raqami (`👤 Aziz Aliyev · Bajaruvchi · …2233`).
+5. Bot tasdiqlash kartochkasini ko'rsatadi: `✅ Yuborish` · `✏️ Tahrirlash` · `❌ Bekor`.
    **Yuborish bosilmaguncha bazaga hech narsa yozilmaydi.**
 
-Web'da ham xuddi shu narsa bor: *+ Vazifa → 🎙 Ovoz bilan* (mikrofon brauzerdan yoziladi).
+Nomzodlar faqat ishni bajara oladigan odamlardan tanlanadi, tekshiruvchi esa qabul qila
+oladiganlardan — ya'ni ovozdan chiqqan vazifa har doim yaratiladi, rad etilmaydi.
+
+Web'da ham xuddi shu narsa bor: *+ Vazifa → 🎙 Ovoz bilan*. Lekin brauzer mikrofoni
+**faqat HTTPS da** (yoki localhost'da) ishlaydi — `http://IP` da brauzerning o'zi ruxsat bermaydi.
+Domen va sertifikat ulanmaguncha web'da tugma o'rniga shu haqda izoh chiqadi, **botdagi ovoz esa
+ishlayveradi** (Telegram audioni o'zi yuboradi, brauzer mikrofoni kerak emas).
 
 ## 6. Testlar
 
 ```bash
-# backend — 57 ta test: TZ §13 qabul mezonlari, rollar, doiralar,
+# backend — 62 ta test: TZ §13 qabul mezonlari, rollar, doiralar,
 #              bildirishnomalar, administratsiya (sozlama, rol matritsasi, parol)
 cd backend && pip install -r requirements.txt && pytest tests -q
 

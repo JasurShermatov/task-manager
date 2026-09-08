@@ -79,7 +79,9 @@ services:
     depends_on:
       - api
     ports:
-      - "80:80"          # domen ulangandan keyin bu yerga "443:443" ham qo'shiladi
+      # Serverda boshqa loyiha 80-portni band qilgan bo'lsa .env da WEB_PORT=8080 deb qo'ying.
+      # Domen ulangandan keyin bu yerga "443:443" ham qo'shiladi.
+      - "${WEB_PORT:-80}:80"
 
 volumes:
   pgdata:

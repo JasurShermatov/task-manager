@@ -94,7 +94,7 @@ export default function TasksPage({ view }: { view: 'board' | 'table' }) {
           <option value="">{t('all')} — {t('f_project')}</option>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>}>
-        <input className="inp inp--sm" style={{ minWidth: 200 }} placeholder={t('search')} value={qRaw} onChange={e => setQRaw(e.target.value)} />
+        <input className="inp inp--sm top__search" placeholder={t('search')} value={qRaw} onChange={e => setQRaw(e.target.value)} />
         <div className="seg" style={{ background: 'var(--bg-3)' }}>
           <button className={view === 'board' ? 'on' : ''} style={view === 'board' ? { background: '#0b0b0c', color: '#fff' } : { color: 'var(--muted)' }} onClick={() => nav('/tasks?' + sp.toString())}>{t('board')}</button>
           <button className={view === 'table' ? 'on' : ''} style={view === 'table' ? { background: '#0b0b0c', color: '#fff' } : { color: 'var(--muted)' }} onClick={() => nav('/table?' + sp.toString())}>{t('table')}</button>
