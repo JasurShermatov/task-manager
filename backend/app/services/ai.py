@@ -83,11 +83,50 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-zа-я0-9 ]", "", s)
 
 
+def user_hint(db: Session, u: User) -> str:
+    """Bir xil ismli odamlarni ajratish uchun qisqa izoh: 'Prorab · B blok'.
+    Doirasi bo'lmasa - hozir qaysi obyektda ishlayotgani olinadi."""
+    where = ""
+    if u.scope_type == "project":
+        p = db.get(Project, u.scope_id) if u.scope_id else None
+        where = p.name if p else ""
+    elif u.scope_type == "location":
+        loc = db.get(Location, u.scope_id) if u.scope_id else None
+        where = loc.name if loc else ""
+    if not where:
+        from ..models import Task
+        pid = db.execute(
+            select(Task.project_id).where(Task.assignee_id == u.id, Task.is_active == True,  # noqa
+                                          Task.status.in_(("plan", "progress", "review", "blocked")))
+            .order_by(Task.updated_at.desc()).limit(1)).scalar()
+        if pid:
+            p = db.get(Project, pid)
+            where = p.name if p else ""
+    return " · ".join(x for x in (u.role.name, where) if x)
+
+
+def _make_hints_unique(cands: list[Candidate], db: Session) -> None:
+    """Ikki tugma bir xil ko'rinib qolmasligi kafolati - oxirgi chora sifatida
+    telefon raqamining oxirgi 4 raqami qo'shiladi."""
+    seen: dict[str, list[Candidate]] = {}
+    for c in cands:
+        seen.setdefault(f"{c.full_name}|{c.hint}", []).append(c)
+    for group in seen.values():
+        if len(group) < 2:
+            continue
+        for c in group:
+            u = db.get(User, c.id)
+            tail = (u.phone or "").strip()[-4:] if u and u.phone else ""
+            c.hint = " · ".join(x for x in (c.hint, f"…{tail}" if tail else f"#{c.id}") if x)
+
+
 def match_users(db: Session, heard: Optional[str], project_id: Optional[int], creator: User) -> tuple[list[Candidate], bool]:
     if not heard:
         return [], False
     users = db.scalars(select(User).where(User.is_active == True)).all()  # noqa
-    users = [u for u in users if u.role.code in ("bajaruvchi", "prorab", "rahbar", "tekshiruvchi") and u.id != creator.id]
+    # faqat ishni bajara oladigan odam taklif qilinadi - tekshiruvchi/kuzatuvchiga vazifa
+    # berilsa u boshlay olmaydi va server baribir rad etadi
+    users = [u for u in users if "tasks.start" in (u.role.permissions_json or []) and u.id != creator.id]
     if project_id:
         users = [u for u in users if user_in_project(u, project_id, db)]
     if not users:
@@ -103,9 +142,28 @@ def match_users(db: Session, heard: Optional[str], project_id: Optional[int], cr
         score = int(max(s1, (s2 + s3) / 2))
         scored.append((score, u))
     scored.sort(key=lambda x: -x[0])
-    top = [Candidate(id=u.id, full_name=u.full_name, role=u.role.name, score=s) for s, u in scored[:3] if s >= 40]
+    top = [Candidate(id=u.id, full_name=u.full_name, role=u.role.name, score=s, hint=user_hint(db, u))
+           for s, u in scored[:3] if s >= 40]
+    _make_hints_unique(top, db)
+    # Bir xil (yoki juda yaqin) ismli ikki odam bo'lsa hech qachon o'zi tanlamaydi -
+    # foydalanuvchiga tugmalar chiqadi. Ismlar bir xil bo'lsa farq 0 bo'ladi.
     confident = bool(top) and top[0].score >= 85 and (len(top) == 1 or top[0].score - top[1].score >= 10)
     return top, confident
+
+
+def default_reviewer_id(db: Session, project_id: Optional[int], assignee_id: Optional[int],
+                        creator: User) -> Optional[int]:
+    """Kim tekshiradi: loyihaning tekshiruvchisi -> rahbari -> 'tasks.accept' huquqi bor boshqa odam.
+    Huquqi yo'q odam (masalan prorab) tekshiruvchi qilib qo'yilsa vazifa tekshiruvda qotib qoladi."""
+    users = [u for u in db.scalars(select(User).where(User.is_active == True))  # noqa
+             if "tasks.accept" in (u.role.permissions_json or []) and u.id != assignee_id]
+    if project_id:
+        users = [u for u in users if user_in_project(u, project_id, db)]
+    if not users:
+        return creator.id if "tasks.accept" in (creator.role.permissions_json or []) else None
+    order = {"tekshiruvchi": 0, "rahbar": 1}
+    users.sort(key=lambda u: (order.get(u.role.code, 2), u.id != creator.id))
+    return users[0].id
 
 
 def match_one(db: Session, heard: Optional[str], rows, key="name", threshold=70):
@@ -170,7 +228,7 @@ def parse_task(db: Session, creator: User, text: str, project_id: Optional[int],
         out.assignee_id = cands[0].id
     elif not cands:
         out.warnings.append("no_assignee")
-    out.reviewer_id = creator.id
+    out.reviewer_id = default_reviewer_id(db, out.project_id, out.assignee_id, creator)
     if data.get("quantity"):
         out.description = (out.description or "") + f"\nHajm: {data.get('quantity')} {data.get('unit') or ''}".rstrip()
     return out

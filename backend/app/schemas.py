@@ -462,6 +462,8 @@ class Candidate(BaseModel):
     full_name: str
     role: str
     score: int
+    # bir xil ismli ikki odamni ajratish uchun: "Prorab · B blok" kabi
+    hint: Optional[str] = None
 
 
 class ParsedTask(BaseModel):

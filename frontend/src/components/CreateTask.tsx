@@ -124,7 +124,9 @@ export default function CreateTask({ onClose, onCreated, defaults }: {
             <span className="small b">{t('cr_pick_assignee')}:</span>
             {cands.map(c => (
               <button key={c.id} className="btn btn--sm" onClick={() => { setF((s: any) => ({ ...s, assignee_id: c.id })); setCands([]) }}>
-                {c.full_name} <span className="faint mono xs">{c.score}%</span>
+                {c.full_name}
+                {c.hint && <span className="faint xs"> · {c.hint}</span>}
+                <span className="faint mono xs"> {c.score}%</span>
               </button>
             ))}
           </div>
@@ -211,7 +213,12 @@ export function VoiceInput({ enabled, projectId, onParsed, info }: {
   const [busy, setBusy] = useState(false)
   const chunks = useRef<Blob[]>([])
 
+  // Brauzer mikrofoni faqat xavfsiz manzilda ishlaydi: HTTPS yoki localhost.
+  // http://IP da navigator.mediaDevices umuman mavjud emas — tugmani bosishdan oldin aytamiz.
+  const micReady = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+
   const start = async () => {
+    if (!micReady) return toastErr({ message: t('cr_voice_https') })
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
@@ -221,7 +228,7 @@ export function VoiceInput({ enabled, projectId, onParsed, info }: {
       mr.onstop = async () => {
         stream.getTracks().forEach(x => x.stop())
         const blob = new Blob(chunks.current, { type: mr.mimeType || 'audio/webm' })
-        if (blob.size < 800) return
+        if (blob.size < 800) return toastErr({ message: t('cr_voice_short') })
         setBusy(true)
         try {
           const fd = new FormData()
@@ -238,6 +245,7 @@ export function VoiceInput({ enabled, projectId, onParsed, info }: {
   const stop = () => { rec?.stop(); setRec(null) }
 
   if (!enabled) return <div className="voice-box"><span className="small muted">🎙 {t('cr_voice_off')}</span></div>
+  if (!micReady) return <div className="voice-box"><span className="small muted">🎙 {t('cr_voice_https')}</span></div>
   return (
     <div className="voice-box">
       {!rec && <button className="btn" disabled={busy} onClick={start}>🎙 {t('cr_voice')}</button>}

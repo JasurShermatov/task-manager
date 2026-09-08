@@ -160,7 +160,10 @@ def confirm_kb(lang: str, d: dict) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if not d.get("assignee_id") and d.get("assignee_candidates"):
         for c in d["assignee_candidates"][:3]:
-            b.row(InlineKeyboardButton(text=f"👤 {c['full_name']} ({c['score']}%)", callback_data=f"nt:pick_a:{c['id']}"))
+            # bir xil ismli ikki odam bo'lsa hint ("Prorab · B blok") ularni ajratib turadi
+            hint = f" · {c['hint']}" if c.get("hint") else ""
+            b.row(InlineKeyboardButton(text=f"👤 {c['full_name']}{hint} ({c['score']}%)"[:64],
+                                       callback_data=f"nt:pick_a:{c['id']}"))
         b.row(InlineKeyboardButton(text=t(lang, "other_person"), callback_data="nt:edit:assignee"))
     ready = bool(d.get("assignee_id") and d.get("project_id") and d.get("title") and d.get("type_id"))
     row = []
