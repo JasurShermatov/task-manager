@@ -17,3 +17,7 @@ backend/test_uploads/
 Claude outputs/
 _smoke.py
 _v2*.tgz
+
+# sertifikatlar (maxfiy kalit)
+certs/*
+!certs/README.md

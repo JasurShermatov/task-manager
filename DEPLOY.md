@@ -238,83 +238,83 @@ server {
 
 Keyin `.env` da `PUBLIC_URL=https://vazifa.saff.uz` va `docker compose -f docker-compose.prod.yml up -d api bot`.
 
-## Domen ulanganda (1-2 kundan keyin)
+## Domen ulash (Cloudflare orqali — 80/443 band bo'lsa ham ishlaydi)
 
-**1.** Domen A-yozuvini serverning IP siga qarating, tarqalishini kuting (`dig saff.uz +short`).
+Bu serverda 80 va 443 portlarni **boshqa loyiha** (saff-nginx) egallagan. Uning
+sozlamasiga tegmasdan domen ulash yo'li: Cloudflare tashqi tomonda HTTPS ni o'z
+zimmasiga oladi, serverga esa bo'sh portdan (8443) keladi.
 
-**2.** `frontend/nginx.conf` da:
+**1. Cloudflare → DNS.** Ikkita A-yozuv, ikkalasi ham **Proxied** (to'q sariq bulut):
 
-```nginx
-server_name saff.uz www.saff.uz;      # _ o'rniga
-```
+| Type | Name | Content |
+|---|---|---|
+| A | `@` | serverning IP si |
+| A | `www` | serverning IP si |
 
-**3.** `.env` da:
+**2. Cloudflare → SSL/TLS → Overview → `Full (strict)`.**
 
-```
-PUBLIC_URL=https://saff.uz
-```
+**3. Cloudflare → SSL/TLS → Origin Server → «Create Certificate»** (15 yillik, bepul).
+Ikkita matn chiqadi — birinchisi sertifikat, ikkinchisi kalit.
 
-**4.** `docker-compose.prod.yml` dagi `web` servisiga port va sertifikat papkasini qo'shing:
-
-```yaml
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - certs:/etc/letsencrypt
-```
-
-va pastdagi `volumes:` ro'yxatiga `certs:` ni qo'shing.
-
-**5.** Sertifikat oling (bir marta):
+**4. Serverda ularni joyiga qo'ying:**
 
 ```bash
-cd /opt/saff
-docker compose -f docker-compose.prod.yml stop web
-docker run --rm -p 80:80 -v saff_certs:/etc/letsencrypt certbot/certbot \
-  certonly --standalone -d saff.uz -d www.saff.uz --agree-tos -m siz@pochta.uz --no-eff-email
+cd /opt/txt_task_manager/task-manager
+mkdir -p certs
+nano certs/origin.pem     # "Origin Certificate" matnini qo'ying
+nano certs/origin.key     # "Private key" matnini qo'ying
+chmod 600 certs/origin.key
 ```
 
-**6.** `frontend/nginx.conf` ga HTTPS blokini qo'shing va HTTP ni yo'naltiring:
+**5. `.env`:**
 
-```nginx
-server {
-    listen 80;
-    server_name saff.uz www.saff.uz;
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 https://$host$request_uri; }
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name saff.uz www.saff.uz;
-
-    ssl_certificate     /etc/letsencrypt/live/saff.uz/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/saff.uz/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-
-    # --- pastdagi hamma narsa 80-portdagi blokdan ko'chiriladi ---
-    root /usr/share/nginx/html;
-    index index.html;
-    client_max_body_size 60m;
-    # ... location /api/ , /assets/ , / bloklari o'zgarishsiz ...
-}
+```
+PUBLIC_URL=https://txtvazifa.uz
+WEB_PORT=8080
+WEB_TLS_PORT=8443
 ```
 
-**7.** Qayta ko'taring va 443 ni oching:
+`PUBLIC_URL` muhim: fayl havolalari va botdagi «Web'da ochish» shu manzil bilan quriladi.
+
+**6. Portni oching va qayta ko'taring:**
 
 ```bash
-ufw allow 443/tcp
-docker compose -f docker-compose.prod.yml up -d --build web
+ufw allow 8443/tcp
+docker compose -f docker-compose.prod.yml up -d --build web api bot
+docker compose -f docker-compose.prod.yml logs web | grep TLS
 ```
 
-Sertifikat 90 kunda tugaydi — yangilash uchun oyiga bir marta:
+Oxirgi buyruq `TLS yoqildi: certs/origin.pem topildi` deyishi kerak.
+Sertifikat bo'lmasa konteyner yiqilmaydi — HTTP'da ishlayveradi.
+
+**7. Cloudflare → Rules → Origin Rules → «Create rule»:**
+
+- Nomi: `txtvazifa -> 8443`
+- Shart: `Hostname` `equals` `txtvazifa.uz` (yoki *All incoming requests*)
+- Amal: **Rewrite to** → `Destination Port` → `8443`
+
+Saqlang. 1-2 daqiqada `https://txtvazifa.uz` ochiladi.
+
+**Tekshirish:**
 
 ```bash
-0 4 1 * * docker run --rm -v saff_certs:/etc/letsencrypt certbot/certbot renew --quiet && cd /opt/saff && docker compose -f docker-compose.prod.yml restart web
+curl -I https://txtvazifa.uz/healthz          # 200
+curl -I --resolve txtvazifa.uz:8443:127.0.0.1 https://txtvazifa.uz/healthz -k
 ```
+
+Cloudflare sertifikati 15 yil — yangilab turish shart emas.
+
+### Agar keyinchalik 80/443 bo'shasa
+
+U holda Cloudflare Origin Rule kerak emas: `.env` da `WEB_PORT=80`, `WEB_TLS_PORT=443`
+qilib, `up -d web` qilinadi. Sertifikat o'sha `certs/` dan ishlayveradi.
+
+### Cloudflare'siz (to'g'ridan-to'g'ri Let's Encrypt)
+
+80-port band bo'lgani uchun HTTP-01 tekshiruvi ishlamaydi. Bu yo'l faqat 80/443
+bo'sh bo'lganda: `certbot certonly --standalone -d txtvazifa.uz` bilan olinadi va
+`fullchain.pem` / `privkey.pem` `certs/origin.pem` va `certs/origin.key` deb
+ko'chiriladi. 90 kunda bir yangilanadi.
 
 ---
 
