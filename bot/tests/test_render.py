@@ -219,3 +219,15 @@ def test_people_text_lists_open_and_late():
          "open_tasks": 0, "late_tasks": 0}])
     assert "Sanjar Ergashev" in text and "Ta'minot" in text and "⏰ 1" in text
     assert "Rustam Yusupov" in text
+
+
+# ---------------------------------------------------------------- tasdiqlash kartochkasi
+def test_send_button_is_always_there():
+    """Ilgari maydon to'lmasa «Yuborish» umuman chiqmasdi — odam faqat «Tahrirlash» va
+    «Bekor» ni ko'rib, nima qilishni bilmay qolardi."""
+    empty = render.confirm_kb("uz", {})
+    full = render.confirm_kb("uz", {"assignee_id": 3, "title": "Ish", "due_at": D(1)})
+    for kb in (empty, full):
+        data = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert "nt:send" in data, "«Yuborish» har doim turishi kerak"
+        assert "nt:edit" in data and "nt:cancel" in data

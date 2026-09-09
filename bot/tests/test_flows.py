@@ -417,3 +417,33 @@ async def test_api_outage_does_not_look_like_being_unlinked():
         assert t("uz", "ask_code") not in s2.texts, "kod so'ralmasligi kerak"
     finally:
         bot.UserMiddleware.down.discard(tg)
+
+
+# ---------------------------------------------------------------- bog'langan odamdan kod so'ralmasin
+@pytest.mark.asyncio
+async def test_linked_user_is_never_asked_for_a_code_again(world):
+    """Eng ko'p bezovta qilgan xato: «kod kiriting» holati bir marta yoqilsa, odam qaysi
+    tugmani bosmasin javob «6 raqamli kodni yuboring» bo'lardi."""
+    tg = world["tg"]["boss"]
+    u = await resolve(tg)
+    st = ctx_factory()(tg)
+    await st.set_state(bot.Link.code)
+    s = Sent()
+    await bot.link_code(FakeMsg(s, tg, text="➕ Yangi vazifa"), st, "uz", u)
+    assert s.last != t("uz", "ask_code")
+    assert t("uz", "btn_new") in s.keys(), "menyu qaytarilishi kerak"
+    assert await st.get_state() is None, "holat tozalanishi kerak"
+
+
+@pytest.mark.asyncio
+async def test_send_without_a_person_opens_the_person_list(world):
+    """«Yuborish» bosilganda maydon to'lmagan bo'lsa — xato emas, o'sha qadam ochiladi."""
+    tg = world["tg"]["boss"]
+    u = await resolve(tg)
+    st = ctx_factory()(tg)
+    await st.update_data(title="Sinov", due_at=None, assignee_id=None)
+    s = Sent()
+    cb = FakeCb(s, "nt:send", tg)
+    await bot.nt_send(cb, st, u, "uz")
+    assert cb.alerts and cb.alerts[0] == t("uz", "need_assignee")
+    assert s.last == t("uz", "nt_who"), "odamlar ro'yxati ochilishi kerak"

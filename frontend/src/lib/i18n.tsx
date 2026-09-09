@@ -35,6 +35,7 @@ const uz = {
   nt_title: 'Yangi vazifa', nt_what: 'Nima qilish kerak?', nt_who: 'Kimga',
   nt_due: 'Qachongacha', nt_desc: 'Izoh', nt_pick: 'Tanlang…',
   nt_time_hint: 'Soat ko\'rsatilmasa — 18:00',
+  pk_heads: 'Bo\'lim boshliqlari', pk_others: 'Boshqaruvchi va ijrochilar',
   nt_created: 'Vazifa berildi',
   // kartochka
   d_created_by: 'Bergan', d_created_at: 'Berilgan', d_original: 'Dastlabki muddat',
@@ -105,6 +106,7 @@ const ru: typeof uz = {
   nt_title: 'Новая задача', nt_what: 'Что нужно сделать?', nt_who: 'Кому',
   nt_due: 'К какому сроку', nt_desc: 'Описание', nt_pick: 'Выберите…',
   nt_time_hint: 'Без указания времени — 18:00',
+  pk_heads: 'Начальники отделов', pk_others: 'Руководство и исполнители',
   nt_created: 'Задача поставлена',
   d_created_by: 'Поставил', d_created_at: 'Создана', d_original: 'Первоначальный срок',
   d_returned: 'Возвращений', d_changed: 'Срок менялся', d_note: 'Комментарий при сдаче',
@@ -169,6 +171,7 @@ const en: typeof uz = {
   nt_title: 'New task', nt_what: 'What needs doing?', nt_who: 'Assignee',
   nt_due: 'Due by', nt_desc: 'Description', nt_pick: 'Choose…',
   nt_time_hint: 'No time given — 18:00',
+  pk_heads: 'Department heads', pk_others: 'Management and staff',
   nt_created: 'Task created',
   d_created_by: 'Created by', d_created_at: 'Created', d_original: 'Original due',
   d_returned: 'Returns', d_changed: 'Due changed', d_note: 'Submission note',

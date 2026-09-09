@@ -166,6 +166,9 @@ Menyu roldan quriladi:
 bera oladi, demak ularning ham topshiradigan ishi bo'ladi. Ro'yxatdagi har bir kartochkada
 o'sha zahoti «Boshladim / Topshirish» tugmasi turadi — qaysinisini xohlasa o'shani tanlaydi.
 
+**Tasdiqlash kartochkasida «✅ Yuborish» har doim turadi.** Biror maydon to'lmagan bo'lsa
+tugma yo'qolib qolmaydi — bosilganda nima yetishmayotgani aytiladi va o'sha qadam ochiladi.
+
 **Topshirish uch qadam:** vazifani tanlash → nima qilindi → rasm/fayl → «Tayyor».
 Dalilsiz yuborib bo'lmaydi.
 
@@ -199,6 +202,14 @@ Ism topilmasa taxmin qilinmaydi — tugma bo'lib chiqadi.
 | Administratsiya | boshliq, assistant | **Bo'limlar**, **Asosiy bo'lim xodimlari**, **Assistantlar** (oxirgisi faqat boshliqqa) |
 | Vazifalarim | **hammaga** | Faqat o'ziga berilgan vazifalar, dalil bilan topshirish |
 | Sozlamalar | hammaga | Profil, parol, Telegram, eslatma soatlari |
+
+**Kimga berish** bitta uzun ro'yxat emas, ikki ustun: chapda *bo'lim boshliqlari*, o'ngda
+*boshqaruvchilar va ijrochilar*, tepasida qidiruv. 60 dan ortiq odam bo'lgani uchun bitta
+ro'yxat cho'zilib ketardi.
+
+**O'lchamlar.** Katta ekranda matn va tugmalar kattalashadi (1200px dan keng — 15px,
+1700px dan keng — 16px), telefonda esa ixchamlashadi va ikki ustun biri ostiga ikkinchisi
+tushadi. Bitta joyda ham gorizontal aylantirish bo'lmaydi.
 
 Ruxsat **har so'rovda serverda** tekshiriladi — manzilni qo'lda yozib kirishga ham yo'l yopiq.
 
