@@ -13,7 +13,7 @@ from .config import settings
 from .db import engine, SessionLocal, Base
 from . import models  # noqa: F401  (register tables)
 from .errors import ApiError
-from .routers import auth, tasks, admin, templates, reports, misc, ai
+from .routers import admin, ai, auth, misc, reports, tasks
 from .seed import seed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
         sch.shutdown(wait=False)
 
 
-app = FastAPI(title="SAFF Vazifalar API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="SAFF Vazifalar API", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
                    expose_headers=["Content-Disposition"])
 
@@ -98,5 +98,5 @@ async def unhandled(request: Request, exc: Exception):
                                                   "request_id": getattr(request.state, "request_id", None)})
 
 
-for r in (auth.router, tasks.router, admin.router, templates.router, reports.router, misc.router, ai.router):
+for r in (auth.router, tasks.router, admin.router, reports.router, misc.router, ai.router):
     app.include_router(r)

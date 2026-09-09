@@ -1,601 +1,333 @@
+"""Vazifa oqimi: berish -> boshlash -> dalil bilan topshirish -> qabul / qayta qil."""
 from __future__ import annotations
 
-import re
-from datetime import date, datetime, timedelta
-from typing import Optional, List
+from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File, Form, Response
-from fastapi.responses import FileResponse
-from sqlalchemy import select, or_, and_, func, desc, asc
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..auth import Ctx, get_ctx, check_task_scope, check_project_scope, location_in_scope, scope_project_id
+from .. import clock
+from ..auth import Ctx, check_task_access, get_ctx
 from ..config import settings
 from ..db import get_db
-from ..errors import ApiError, validation, version_conflict, not_found, permission_denied, unauthorized
-from ..models import (Task, TaskType, TaskChecklistItem, TaskDependency, TaskDailyProgress, TaskAttachment,
-                      TaskComment, TaskHistory, User, Location, Project, TaskTemplate, EVIDENCE_KINDS,
-                      PRIORITIES)
-from ..schemas import (Page, TaskCard, TaskDetail, TaskCreate, TaskPatch, TransitionIn, NoteIn, BlockIn, ReturnIn,
-                       ChecklistBulk, ChecklistAdd, ChecklistItemOut, DailyIn, DailyOut, AttachmentOut,
-                       CommentIn, CommentOut, HistoryOut, DependencyIn)
-from ..services import tasks as svc
-from ..services.enrich import build_cards, attachment_out
+from ..errors import invalid_transition, not_found, permission_denied, task_not_found, validation, version_conflict
+from ..models import (
+    CANCELLED, DONE, NEW, PROGRESS, SUBMITTED, Department, Task, TaskComment, TaskFile, TaskHistory, User,
+)
+from ..schemas import CommentIn, CommentOut, FileOut, HistoryOut, ReasonIn, SubmitIn, TaskIn, TaskListOut, TaskOut, TaskPatch
 from ..services import files as fsvc
+from ..services import tasks as svc
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
-
-SORTABLE = {"planned_end", "planned_start", "created_at", "updated_at", "priority", "status", "code", "title", "progress_percent"}
-
-
-# ---------- scope filter for lists ----------
-def scope_filter(ctx: Ctx, db: Session, q):
-    u = ctx.user
-    if u.role.code == "bajaruvchi":
-        return q.where(or_(Task.assignee_id == u.id, Task.reviewer_id == u.id, Task.created_by == u.id))
-    if u.scope_type == "system":
-        return q
-    if u.scope_type == "project":
-        return q.where(Task.project_id == u.scope_id)
-    if u.scope_type == "location":
-        # o'z blokidagi hamma joy + loyihaning joysiz (umumiy) vazifalari + o'ziga tegishlilari
-        ids = descendant_location_ids(db, u.scope_id)
-        pid = scope_project_id(db, u)
-        return q.where(or_(Task.location_id.in_(ids),
-                           and_(Task.location_id.is_(None), Task.project_id == pid),
-                           Task.assignee_id == u.id, Task.reviewer_id == u.id))
-    return q.where(False)
+router = APIRouter(tags=["tasks"])
 
 
-def descendant_location_ids(db: Session, root: int) -> list[int]:
-    ids = [root]
-    frontier = [root]
-    while frontier:
-        rows = db.scalars(select(Location.id).where(Location.parent_id.in_(frontier))).all()
-        frontier = [r for r in rows if r not in ids]
-        ids.extend(frontier)
-    return ids
-
-
-# ---------- list ----------
-@router.get("", response_model=Page[TaskCard])
-def list_tasks(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db),
-               q: Optional[str] = None, project_id: Optional[int] = None, location_id: Optional[int] = None,
-               status: Optional[str] = None, priority: Optional[str] = None, type_id: Optional[int] = None,
-               assignee_id: Optional[int] = None, reviewer_id: Optional[int] = None,
-               overdue: Optional[bool] = None, blocked: Optional[bool] = None, mine: Optional[bool] = None,
-               review_queue: Optional[bool] = None,
-               date_from: Optional[date] = None, date_to: Optional[date] = None,
-               limit: int = Query(100, le=200), offset: int = 0,
-               sort: str = "planned_end", order: str = "asc"):
-    ctx.require("tasks.read")
-    stmt = select(Task).where(Task.is_active == True)  # noqa
-    stmt = scope_filter(ctx, db, stmt)
-    if q:
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Task.title.ilike(like), Task.code.ilike(like), Task.description.ilike(like)))
-    if project_id:
-        stmt = stmt.where(Task.project_id == project_id)
-    if location_id:
-        stmt = stmt.where(Task.location_id.in_(descendant_location_ids(db, location_id)))
-    if status:
-        stmt = stmt.where(Task.status.in_(status.split(",")))
-    if priority:
-        stmt = stmt.where(Task.priority.in_(priority.split(",")))
-    if type_id:
-        stmt = stmt.where(Task.type_id == type_id)
-    if assignee_id:
-        stmt = stmt.where(Task.assignee_id == assignee_id)
-    if reviewer_id:
-        stmt = stmt.where(Task.reviewer_id == reviewer_id)
-    if mine:
-        stmt = stmt.where(or_(Task.assignee_id == ctx.user.id, Task.reviewer_id == ctx.user.id))
-    if review_queue:
-        stmt = stmt.where(Task.status == "review", Task.reviewer_id == ctx.user.id)
-    if overdue:
-        stmt = stmt.where(Task.planned_end < date.today(), Task.status.notin_(("done", "cancelled")))
-    if blocked:
-        stmt = stmt.where(Task.status == "blocked")
-    if date_from:
-        stmt = stmt.where(Task.planned_end >= date_from)
-    if date_to:
-        stmt = stmt.where(Task.planned_start <= date_to)
-
-    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
-    col = getattr(Task, sort if sort in SORTABLE else "planned_end")
-    stmt = stmt.order_by(desc(col) if order == "desc" else asc(col), Task.id).limit(limit).offset(offset)
-    rows = db.scalars(stmt).all()
-    return Page(items=build_cards(db, rows), total=total, limit=limit, offset=offset)
-
-
-# ---------- create ----------
-def _validate_people(db: Session, assignee_id: int, reviewer_id: int):
-    a, r = db.get(User, assignee_id), db.get(User, reviewer_id)
-    fe = {}
-    if not a or not a.is_active:
-        fe["assignee_id"] = "not_found"
-    if not r or not r.is_active:
-        fe["reviewer_id"] = "not_found"
-    if fe:
-        raise validation("VALIDATION", "Bajaruvchi yoki tekshiruvchi topilmadi.", field_errors=fe)
-    if "tasks.start" not in (a.role.permissions_json or []):
-        # aks holda vazifa "rejada" holatida qotib qoladi - tayinlangan odam uni boshlay olmaydi
-        # (masalan tekshiruvchi yoki kuzatuvchi bajaruvchi qilib tanlansa)
-        raise validation("VALIDATION", "Bu odam vazifani bajara olmaydi (ish boshlash huquqi yo'q).",
-                         field_errors={"assignee_id": "cannot_execute"})
-    if "tasks.accept" not in (r.role.permissions_json or []):
-        # aks holda vazifa "tekshiruvda" holatida abadiy osilib qoladi - tayinlangan odam uni
-        # hech qachon qabul qila olmaydi (masalan prorab yoki ishchi tekshiruvchi qilib tanlansa)
-        raise validation("VALIDATION", "Bu odam vazifani qabul qila olmaydi (tekshiruvchi huquqi yo'q).",
-                         field_errors={"reviewer_id": "cannot_accept"})
-    return a, r
-
-
-def _apply_checklist(db: Session, task: Task, items: list[dict]):
-    for i, it in enumerate(items or []):
-        title = (it.get("title") or "").strip() if isinstance(it, dict) else (it.title or "").strip()
-        if not title:
-            continue
-        req = it.get("is_required", True) if isinstance(it, dict) else it.is_required
-        db.add(TaskChecklistItem(task_id=task.id, title=title, is_required=bool(req), sort_order=i))
-
-
-def create_task_core(db: Session, ctx: Ctx, body: TaskCreate) -> Task:
-    ctx.require("tasks.create")
-    check_project_scope(ctx, body.project_id, body.location_id, db)
-    if body.priority not in PRIORITIES:
-        raise validation("VALIDATION", "Muhimlik noto'g'ri.", field_errors={"priority": "invalid"})
-    if body.planned_end < body.planned_start:
-        raise validation("VALIDATION", "Tugash sanasi boshlanishdan oldin bo'lishi mumkin emas.",
-                         field_errors={"planned_end": "before_start"})
-    if not db.get(Project, body.project_id):
-        raise validation("VALIDATION", "Loyiha topilmadi.", field_errors={"project_id": "not_found"})
-    tt = db.get(TaskType, body.type_id)
-    if not tt or not tt.is_active:
-        raise validation("VALIDATION", "Ish turi topilmadi.", field_errors={"type_id": "not_found"})
-    if body.location_id:
-        loc = db.get(Location, body.location_id)
-        if not loc or loc.project_id != body.project_id:
-            raise validation("VALIDATION", "Joy loyihaga tegishli emas.", field_errors={"location_id": "invalid"})
-    _validate_people(db, body.assignee_id, body.reviewer_id)
-
-    task = Task(code=svc.next_code(db), project_id=body.project_id, location_id=body.location_id, type_id=body.type_id,
-                title=body.title.strip(), description=body.description, priority=body.priority,
-                assignee_id=body.assignee_id, reviewer_id=body.reviewer_id,
-                planned_start=body.planned_start, planned_end=body.planned_end,
-                planned_quantity=body.planned_quantity, unit=body.unit, planned_crew_size=body.planned_crew_size,
-                template_id=body.template_id, created_by=ctx.user.id)
-    db.add(task)
-    db.flush()
-    checklist = body.checklist if body.checklist is not None else (tt.default_checklist_json or [])
-    _apply_checklist(db, task, [c if isinstance(c, dict) else c.model_dump() for c in checklist])
-    for dep in body.depends_on or []:
-        d = db.get(Task, dep)
-        if not d or d.project_id != task.project_id:
-            raise validation("VALIDATION", "Bog'liq vazifa topilmadi.", field_errors={"depends_on": "not_found"})
-        db.add(TaskDependency(task_id=task.id, depends_on_task_id=dep))
-    svc.recompute_progress(db, task)
-    svc.log(db, task, "create", ctx, {}, {"title": task.title, "assignee_id": task.assignee_id,
-                                          "planned_end": task.planned_end, "status": "plan"})
-    svc.notify(db, [task.assignee_id], "assigned", task, {"planned_end": str(task.planned_end),
-                                                          "assigned_by": ctx.user.full_name})
-    if task.reviewer_id != task.assignee_id:
-        svc.notify(db, [task.reviewer_id], "assigned_reviewer", task, {"planned_end": str(task.planned_end)}, telegram=False)
-    return task
-
-
-@router.post("", response_model=TaskDetail, status_code=201)
-def create_task(body: TaskCreate, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    task = create_task_core(db, ctx, body)
-    db.commit()
-    return get_detail(db, ctx, task)
-
-
-# ---------- detail ----------
-def get_detail(db: Session, ctx: Ctx, task: Task) -> TaskDetail:
-    card = build_cards(db, [task])[0]
-    d = TaskDetail(**card.model_dump(), description=task.description, planned_crew_size=task.planned_crew_size,
-                   template_id=task.template_id, created_by=task.created_by)
-    d.checklist = [ChecklistItemOut.model_validate(i) for i in db.scalars(
-        select(TaskChecklistItem).where(TaskChecklistItem.task_id == task.id).order_by(TaskChecklistItem.sort_order, TaskChecklistItem.id))]
-    d.dependencies = [{"id": t.id, "code": t.code, "title": t.title, "status": t.status} for t in db.scalars(
-        select(Task).join(TaskDependency, TaskDependency.depends_on_task_id == Task.id).where(TaskDependency.task_id == task.id))]
-    d.dependents = [{"id": t.id, "code": t.code, "title": t.title, "status": t.status} for t in db.scalars(
-        select(Task).join(TaskDependency, TaskDependency.task_id == Task.id).where(TaskDependency.depends_on_task_id == task.id))]
-    atts = db.scalars(select(TaskAttachment).where(TaskAttachment.task_id == task.id, TaskAttachment.is_active == True)  # noqa
-                      .order_by(TaskAttachment.created_at.desc())).all()
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_({a.uploaded_by for a in atts} or {0})))}
-    d.attachments = [attachment_out(db, a, users) for a in atts]
-    d.permissions = svc.task_permissions(db, ctx, task)
-    d.required_evidence_kinds = svc.type_required_kinds(db, task)
-    return d
-
-
-def load(db: Session, ctx: Ctx, task_id: int) -> Task:
-    ctx.require("tasks.read")
-    t = svc.get_task_or_404(db, task_id)
-    check_task_scope(ctx, t, db)
+def _get(db: Session, ctx: Ctx, task_id: int) -> Task:
+    t = db.get(Task, task_id)
+    if not t:
+        raise task_not_found()
+    check_task_access(ctx, t)
     return t
 
 
-@router.get("/by-code/{code}", response_model=TaskDetail)
-def get_by_code(code: str, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = db.scalar(select(Task).where(Task.code == code.upper().strip(), Task.is_active == True))  # noqa
+def _one(db: Session, ctx: Ctx, t: Task) -> TaskOut:
+    row = svc.enrich(db, [t], ctx)[0]
+    return TaskOut(**svc.with_files(db, row, t))
+
+
+def _assignee(db: Session, assignee_id: int) -> User:
+    u = db.get(User, assignee_id)
+    if not u or not u.is_active:
+        raise validation("VALIDATION", "Bunday xodim topilmadi yoki u faol emas.",
+                         field_errors={"assignee_id": "not_found"})
+    return u
+
+
+def _due(value, field: str = "due_at") -> datetime:
+    due = clock.parse_due(value)
+    if not due:
+        raise validation("VALIDATION", "Muddat noto'g'ri. Masalan: 2026-09-10 yoki 2026-09-10T14:00.",
+                         field_errors={field: "invalid"})
+    return due
+
+
+# ---------------------------------------------------------------- ro'yxat
+@router.get("/tasks", response_model=TaskListOut)
+def list_tasks(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db),
+               status: Optional[str] = None, assignee_id: Optional[int] = None,
+               department_id: Optional[int] = None, overdue: Optional[bool] = None,
+               date_from: Optional[str] = None, date_to: Optional[str] = None,
+               q: Optional[str] = None, page: int = 1, per_page: int = Query(50, le=200)):
+    ref = clock.now()
+    sel = select(Task)
+    if not ctx.is_manager:
+        sel = sel.where(Task.assignee_id == ctx.user.id)   # ijrochi faqat o'zinikini ko'radi
+    if status:
+        sel = sel.where(Task.status.in_([s.strip() for s in status.split(",") if s.strip()]))
+    if assignee_id:
+        sel = sel.where(Task.assignee_id == assignee_id)
+    if department_id:
+        ids = [u.id for u in db.scalars(select(User).where(User.department_id == department_id))]
+        sel = sel.where(Task.assignee_id.in_(ids or [0]))
+    if overdue:
+        sel = sel.where(Task.status.in_((NEW, PROGRESS)), Task.due_at < ref)
+    if date_from:
+        sel = sel.where(Task.due_at >= clock.at(clock.parse_due(date_from).date(), 0, 0))
+    if date_to:
+        sel = sel.where(Task.due_at <= clock.at(clock.parse_due(date_to).date(), 23, 59))
+    if q:
+        like = f"%{q.strip().lower()}%"
+        sel = sel.where(or_(func.lower(Task.title).like(like), func.lower(Task.code).like(like)))
+
+    total = db.execute(select(func.count()).select_from(sel.subquery())).scalar() or 0
+    page = max(1, page)
+    rows = db.scalars(sel.order_by(Task.due_at.asc(), Task.id.desc())
+                      .offset((page - 1) * per_page).limit(per_page)).all()
+    return TaskListOut(items=[TaskOut(**r) for r in svc.enrich(db, rows, ctx)],
+                       total=total, page=page, per_page=per_page)
+
+
+@router.get("/tasks/by-code/{code}", response_model=TaskOut)
+def by_code(code: str, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    t = db.scalar(select(Task).where(func.upper(Task.code) == code.strip().upper()))
     if not t:
-        from ..errors import task_not_found
         raise task_not_found()
-    check_task_scope(ctx, t, db)
-    return get_detail(db, ctx, t)
+    check_task_access(ctx, t)
+    return _one(db, ctx, t)
 
 
-@router.get("/{task_id}", response_model=TaskDetail)
+@router.get("/tasks/{task_id}", response_model=TaskOut)
 def get_task(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    return get_detail(db, ctx, load(db, ctx, task_id))
+    return _one(db, ctx, _get(db, ctx, task_id))
 
 
-# ---------- patch ----------
-@router.patch("/{task_id}", response_model=TaskDetail)
-def patch_task(task_id: int, body: TaskPatch, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("tasks.edit")
-    if t.row_version != body.row_version:
+# ---------------------------------------------------------------- yaratish va tahrirlash
+@router.post("/tasks", response_model=TaskOut, status_code=201)
+def create_task(body: TaskIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    ctx.require_manager()
+    _assignee(db, body.assignee_id)
+    due = _due(body.due_at)
+    t = Task(code=svc.next_code(db), title=body.title.strip(),
+             description=(body.description or "").strip() or None,
+             assignee_id=body.assignee_id, created_by=ctx.user.id,
+             due_at=due, original_due_at=due, status=NEW)
+    db.add(t)
+    db.flush()
+    svc.log(db, t, "create", ctx, new={"title": t.title, "assignee_id": t.assignee_id,
+                                       "due_at": due.isoformat(timespec="minutes")})
+    svc.notify(db, t.assignee_id, "task_created", t,
+               svc.task_payload(db, t, actor_name=ctx.user.full_name))
+    db.commit()
+    db.refresh(t)
+    return _one(db, ctx, t)
+
+
+@router.patch("/tasks/{task_id}", response_model=TaskOut)
+def update_task(task_id: int, body: TaskPatch, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    ctx.require_manager()
+    t = _get(db, ctx, task_id)
+    if t.status in (DONE, CANCELLED):
+        raise invalid_transition(t.status, "edit")
+    if body.row_version is not None and body.row_version != t.row_version:
         raise version_conflict()
-    if t.status in ("done", "cancelled"):
-        raise validation("INVALID_TRANSITION", "Yopilgan vazifani tahrirlab bo'lmaydi.")
-    data = body.model_dump(exclude_unset=True, exclude={"row_version", "date_change_reason"})
+
+    data = body.model_dump(exclude_unset=True)
     old, new = {}, {}
-    if "assignee_id" in data or "reviewer_id" in data:
-        ctx.require("tasks.assign")
-        _validate_people(db, data.get("assignee_id", t.assignee_id), data.get("reviewer_id", t.reviewer_id))
-    if "planned_start" in data or "planned_end" in data:
-        ctx.require("tasks.change_dates")
-        ps = data.get("planned_start", t.planned_start)
-        pe = data.get("planned_end", t.planned_end)
-        if pe < ps:
-            raise validation("VALIDATION", "Tugash sanasi boshlanishdan oldin.", field_errors={"planned_end": "before_start"})
-        if not (body.date_change_reason or "").strip():
-            raise validation("VALIDATION", "Muddat o'zgarishi sababi majburiy.", field_errors={"date_change_reason": "required"})
-    if "priority" in data and data["priority"] not in PRIORITIES:
-        raise validation("VALIDATION", "Muhimlik noto'g'ri.", field_errors={"priority": "invalid"})
-    if "location_id" in data and data["location_id"]:
-        loc = db.get(Location, data["location_id"])
-        if not loc or loc.project_id != t.project_id:
-            raise validation("VALIDATION", "Joy loyihaga tegishli emas.", field_errors={"location_id": "invalid"})
-    for k, v in data.items():
-        if getattr(t, k) != v:
-            old[k], new[k] = getattr(t, k), v
-            setattr(t, k, v)
-    if not new:
-        return get_detail(db, ctx, t)
-    svc.bump(t)
-    if "planned_start" in new or "planned_end" in new:
-        new["reason"] = body.date_change_reason
-        svc.notify(db, [t.assignee_id], "dates_changed", t, {"planned_end": str(t.planned_end), "reason": body.date_change_reason}, telegram=False)
-    if "assignee_id" in new:
-        svc.notify(db, [t.assignee_id], "assigned", t, {"planned_end": str(t.planned_end), "assigned_by": ctx.user.full_name})
-    svc.recompute_progress(db, t)
-    svc.log(db, t, "update", ctx, old, new)
+    if data.get("title"):
+        old["title"], t.title, new["title"] = t.title, data["title"].strip(), data["title"].strip()
+    if "description" in data:
+        t.description = (data["description"] or "").strip() or None
+        new["description"] = t.description
+    if data.get("assignee_id") and data["assignee_id"] != t.assignee_id:
+        _assignee(db, data["assignee_id"])
+        old["assignee_id"], previous = t.assignee_id, t.assignee_id
+        t.assignee_id = data["assignee_id"]
+        new["assignee_id"] = t.assignee_id
+        svc.notify(db, previous, "task_unassigned", t, svc.task_payload(db, t, actor_name=ctx.user.full_name))
+        svc.notify(db, t.assignee_id, "task_created", t, svc.task_payload(db, t, actor_name=ctx.user.full_name))
+    if data.get("due_at"):
+        due = _due(data["due_at"])
+        if due != t.due_at:
+            old["due_at"] = t.due_at.isoformat(timespec="minutes")
+            t.due_at = due
+            t.due_changed_count += 1
+            new["due_at"] = due.isoformat(timespec="minutes")
+            svc.notify(db, t.assignee_id, "due_changed", t,
+                       svc.task_payload(db, t, actor_name=ctx.user.full_name, old_due=old["due_at"]))
+    if new:
+        t.row_version += 1
+        svc.log(db, t, "update", ctx, old=old, new=new)
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-@router.delete("/{task_id}", status_code=204)
-def delete_task(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("tasks.delete")
-    if t.status == "done":
-        raise validation("INVALID_TRANSITION", "Bajarilgan vazifa o'chirilmaydi.")
-    t.is_active = False
-    svc.bump(t)
-    svc.log(db, t, "delete", ctx, {"is_active": True}, {"is_active": False})
-    db.commit()
-    return Response(status_code=204)
-
-
-# ---------- transitions ----------
-@router.post("/{task_id}/transition", response_model=TaskDetail)
-def transition(task_id: int, body: TransitionIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, body.to, body.note)
-    db.commit()
-    return get_detail(db, ctx, t)
-
-
-@router.post("/{task_id}/block", response_model=TaskDetail)
-def block(task_id: int, body: BlockIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, "blocked", body.note, block_reason=body.reason)
-    db.commit()
-    return get_detail(db, ctx, t)
-
-
-@router.post("/{task_id}/unblock", response_model=TaskDetail)
-def unblock(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, t.previous_status or "plan")
-    db.commit()
-    return get_detail(db, ctx, t)
-
-
-@router.post("/{task_id}/start", response_model=TaskDetail)
+# ---------------------------------------------------------------- oqim
+@router.post("/tasks/{task_id}/start", response_model=TaskOut)
 def start(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, "progress")
+    t = _get(db, ctx, task_id)
+    if t.assignee_id != ctx.user.id:
+        raise permission_denied()
+    if t.status != NEW:
+        raise invalid_transition(t.status, PROGRESS)
+    t.status, t.started_at = PROGRESS, clock.now()
+    svc.log(db, t, "start", ctx)
+    svc.notify_managers(db, "task_started", t, exclude=ctx.user.id, actor_name=ctx.user.full_name)
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-@router.post("/{task_id}/submit-review", response_model=TaskDetail)
-def submit_review(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, "review")
+def _fresh_proofs(db: Session, t: Task) -> int:
+    """Qaytarilgandan keyin qo'yilgan dalillar. Eski dalil bilan qayta topshirib bo'lmaydi."""
+    since = t.last_returned_at or t.created_at
+    return db.execute(select(func.count()).select_from(TaskFile).where(
+        TaskFile.task_id == t.id, TaskFile.kind == "proof", TaskFile.is_active.is_(True),
+        TaskFile.created_at >= since)).scalar() or 0
+
+
+@router.post("/tasks/{task_id}/submit", response_model=TaskOut)
+def submit(task_id: int, body: SubmitIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    """Topshirish — dalilsiz bo'lmaydi. Fayllar avval /tasks/{id}/files ga yuklanadi."""
+    t = _get(db, ctx, task_id)
+    if t.assignee_id != ctx.user.id:
+        raise permission_denied()
+    if t.status not in (NEW, PROGRESS):
+        raise invalid_transition(t.status, SUBMITTED)
+    if not _fresh_proofs(db, t):
+        raise validation("PROOF_REQUIRED",
+                         "Dalil kerak: kamida bitta rasm yoki fayl biriktiring.",
+                         field_errors={"files": "required"})
+    t.status, t.submitted_at = SUBMITTED, clock.now()
+    t.submit_note = body.note.strip()
+    svc.log(db, t, "submit", ctx, new={"note": t.submit_note})
+    late = t.late_seconds(clock.now())
+    svc.notify_managers(db, "task_submitted", t, exclude=ctx.user.id,
+                        actor_name=ctx.user.full_name, note=t.submit_note,
+                        on_time=late == 0, proof_count=_fresh_proofs(db, t))
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-@router.post("/{task_id}/accept", response_model=TaskDetail)
-def accept(task_id: int, body: NoteIn = NoteIn(), ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    svc.transition(db, ctx, t, "done", body.note)
+@router.post("/tasks/{task_id}/accept", response_model=TaskOut)
+def accept(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    ctx.require_manager()
+    t = _get(db, ctx, task_id)
+    if t.status != SUBMITTED:
+        raise invalid_transition(t.status, DONE)
+    t.status, t.done_at, t.accepted_by = DONE, clock.now(), ctx.user.id
+    svc.log(db, t, "accept", ctx)
+    svc.notify(db, t.assignee_id, "task_accepted", t, svc.task_payload(db, t, actor_name=ctx.user.full_name))
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-@router.post("/{task_id}/return", response_model=TaskDetail)
-def return_task(task_id: int, body: ReturnIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    if t.status != "review":
-        from ..errors import invalid_transition
-        raise invalid_transition(t.status, "progress")
-    svc.transition(db, ctx, t, "progress", body.reason)
+@router.post("/tasks/{task_id}/return", response_model=TaskOut)
+def return_task(task_id: int, body: ReasonIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    """Qayta qil — sabab majburiy, aks holda ijrochi nimani tuzatishni bilmaydi."""
+    ctx.require_manager()
+    t = _get(db, ctx, task_id)
+    if t.status != SUBMITTED:
+        raise invalid_transition(t.status, PROGRESS)
+    reason = body.reason.strip()
+    t.status, t.submitted_at, t.submit_note = PROGRESS, None, None
+    t.return_count += 1
+    t.last_returned_at = clock.now()
+    db.add(TaskComment(task_id=t.id, text=f"↩️ {reason}", author_id=ctx.user.id, source=ctx.source))
+    svc.log(db, t, "return", ctx, new={"reason": reason, "return_count": t.return_count})
+    svc.notify(db, t.assignee_id, "task_returned", t,
+               svc.task_payload(db, t, actor_name=ctx.user.full_name, reason=reason))
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-@router.post("/{task_id}/reopen", response_model=TaskDetail)
-def reopen(task_id: int, body: NoteIn = NoteIn(), ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    if t.status != "done":
-        from ..errors import invalid_transition
-        raise invalid_transition(t.status, "progress")
-    svc.transition(db, ctx, t, "progress", body.note)
+@router.post("/tasks/{task_id}/cancel", response_model=TaskOut)
+def cancel(task_id: int, body: ReasonIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    ctx.require_manager()
+    t = _get(db, ctx, task_id)
+    if t.status in (DONE, CANCELLED):
+        raise invalid_transition(t.status, CANCELLED)
+    t.status, t.cancelled_at = CANCELLED, clock.now()
+    svc.log(db, t, "cancel", ctx, new={"reason": body.reason.strip()})
+    svc.notify(db, t.assignee_id, "task_cancelled", t,
+               svc.task_payload(db, t, actor_name=ctx.user.full_name, reason=body.reason.strip()))
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(t)
+    return _one(db, ctx, t)
 
 
-# ---------- checklist ----------
-def _can_act(ctx: Ctx, t: Task):
-    if ctx.user.role.code == "bajaruvchi" and t.assignee_id != ctx.user.id:
-        raise ApiError(403, "SCOPE_FORBIDDEN", "Bu vazifa sizga biriktirilmagan.")
-
-
-@router.get("/{task_id}/checklist", response_model=List[ChecklistItemOut])
-def checklist(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    return db.scalars(select(TaskChecklistItem).where(TaskChecklistItem.task_id == t.id)
-                      .order_by(TaskChecklistItem.sort_order, TaskChecklistItem.id)).all()
-
-
-@router.patch("/{task_id}/checklist", response_model=TaskDetail)
-def checklist_bulk(task_id: int, body: ChecklistBulk, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("checklist.edit")
-    _can_act(ctx, t)
-    if t.status in ("done", "cancelled"):
-        raise validation("INVALID_TRANSITION", "Yopilgan vazifa checklisti o'zgarmaydi.")
-    changed = {}
-    for it in body.items:
-        item = db.get(TaskChecklistItem, int(it["id"]))
-        if not item or item.task_id != t.id:
-            continue
-        val = bool(it.get("is_done"))
-        if item.is_done != val:
-            item.is_done = val
-            item.done_by = ctx.user.id if val else None
-            item.done_at = datetime.utcnow() if val else None
-            changed[item.title] = val
-    if changed:
-        svc.recompute_progress(db, t)
-        svc.bump(t)
-        svc.log(db, t, "checklist", ctx, {}, changed)
-        db.commit()
-    return get_detail(db, ctx, t)
-
-
-@router.post("/{task_id}/checklist", response_model=TaskDetail, status_code=201)
-def checklist_add(task_id: int, body: ChecklistAdd, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("checklist.edit")
-    _can_act(ctx, t)
-    mx = db.execute(select(func.coalesce(func.max(TaskChecklistItem.sort_order), -1)).where(TaskChecklistItem.task_id == t.id)).scalar()
-    db.add(TaskChecklistItem(task_id=t.id, title=body.title.strip(), is_required=body.is_required, sort_order=mx + 1))
-    svc.recompute_progress(db, t)
-    svc.bump(t)
-    svc.log(db, t, "checklist_add", ctx, {}, {"title": body.title})
+# ---------------------------------------------------------------- fayllar va izohlar
+@router.post("/tasks/{task_id}/files", response_model=FileOut, status_code=201)
+async def upload(task_id: int, file: UploadFile = File(...), kind: str = Form("proof"),
+                 ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    t = _get(db, ctx, task_id)
+    if not (ctx.is_manager or t.assignee_id == ctx.user.id):
+        raise permission_denied()
+    if kind not in ("proof", "task"):
+        kind = "proof"
+    data = await file.read()
+    mime = file.content_type or "application/octet-stream"
+    limit = settings.MAX_IMAGE_MB if mime.startswith("image/") else settings.MAX_DOC_MB
+    if len(data) > limit * 1024 * 1024:
+        raise validation("FILE_TOO_LARGE", f"Fayl {limit} MB dan katta bo'lmasligi kerak.",
+                         field_errors={"file": "too_large"}, limit_mb=limit)
+    if mime not in fsvc.ALLOWED and not mime.startswith("image/"):
+        raise validation("FILE_TYPE", "Bu turdagi fayl qabul qilinmaydi.", field_errors={"file": "type"})
+    key = fsvc.store(data, file.filename or "file")
+    row = TaskFile(task_id=t.id, kind=kind, storage_key=key, filename=(file.filename or "file")[:250],
+                   mime_type=mime, size=len(data), uploaded_by=ctx.user.id, source=ctx.source)
+    db.add(row)
     db.commit()
-    return get_detail(db, ctx, t)
+    db.refresh(row)
+    return FileOut(id=row.id, kind=row.kind, filename=row.filename, mime_type=row.mime_type,
+                   size=row.size, url=fsvc.signed_url(row.id), created_at=row.created_at)
 
 
-# ---------- daily progress ----------
-@router.get("/{task_id}/daily-progress", response_model=List[DailyOut])
-def daily_list(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    rows = db.scalars(select(TaskDailyProgress).where(TaskDailyProgress.task_id == t.id)
-                      .order_by(TaskDailyProgress.date.desc(), TaskDailyProgress.id.desc())).all()
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_({r.created_by for r in rows} or {0})))}
-    out = []
-    for r in rows:
-        o = DailyOut.model_validate(r)
-        o.created_by_name = users[r.created_by].full_name if r.created_by in users else ""
-        out.append(o)
-    return out
+@router.delete("/tasks/{task_id}/files/{file_id}")
+def delete_file(task_id: int, file_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    t = _get(db, ctx, task_id)
+    row = db.get(TaskFile, file_id)
+    if not row or row.task_id != t.id or not row.is_active:
+        raise not_found("Fayl")
+    if not (ctx.is_manager or row.uploaded_by == ctx.user.id):
+        raise permission_denied()
+    row.is_active = False
+    db.commit()
+    return {"ok": True}
 
 
-@router.post("/{task_id}/daily-progress", response_model=DailyOut, status_code=201)
-def daily_add(task_id: int, body: DailyIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("progress.create")
-    _can_act(ctx, t)
-    if t.status not in ("progress", "blocked", "review"):
-        raise validation("INVALID_TRANSITION", "Kunlik hisobot faqat jarayondagi vazifaga qo'shiladi.")
-    dup = db.scalar(select(TaskDailyProgress).where(TaskDailyProgress.task_id == t.id, TaskDailyProgress.date == body.date,
-                                                   TaskDailyProgress.is_duplicate == False))  # noqa
-    row = TaskDailyProgress(task_id=t.id, date=body.date, quantity=body.quantity, workers_count=body.workers_count,
-                            work_hours=body.work_hours, note=body.note, source=ctx.source, created_by=ctx.user.id,
-                            is_duplicate=bool(dup))
+@router.post("/tasks/{task_id}/comments", response_model=CommentOut, status_code=201)
+def comment(task_id: int, body: CommentIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    """Ijrochi «material yo'q» deb yozsa — boss va assistantga darhol boradi.
+    Alohida «muammo» holati o'rniga shu ishlatiladi."""
+    t = _get(db, ctx, task_id)
+    row = TaskComment(task_id=t.id, text=body.text.strip(), author_id=ctx.user.id, source=ctx.source)
     db.add(row)
     db.flush()
-    svc.recompute_quantity(db, t)
-    svc.bump(t)
-    svc.log(db, t, "daily_progress", ctx, {}, {"date": body.date, "quantity": body.quantity,
-                                               "workers": body.workers_count, "duplicate": bool(dup)})
-    # the report must reach the people who supervise this task: prorab, rahbar and the reviewer
-    watchers = svc.prorab_and_rahbar_ids(db, t) | {t.reviewer_id}
-    watchers.discard(ctx.user.id)
-    svc.notify(db, watchers, "daily_report", t, {
-        "date": str(body.date), "quantity": float(body.quantity) if body.quantity is not None else None,
-        "unit": t.unit or "", "workers": body.workers_count, "note": (body.note or "")[:200],
-        "by": ctx.user.full_name, "total": float(t.actual_quantity or 0),
-        "plan": float(t.planned_quantity) if t.planned_quantity else None,
-        "duplicate": bool(dup),
-    })
+    payload = svc.task_payload(db, t, actor_name=ctx.user.full_name, text=row.text)
+    if ctx.is_manager:
+        svc.notify(db, t.assignee_id, "comment", t, payload)
+    else:
+        svc.notify_managers(db, "comment", t, exclude=ctx.user.id,
+                            actor_name=ctx.user.full_name, text=row.text)
     db.commit()
-    o = DailyOut.model_validate(row)
-    o.created_by_name = ctx.user.full_name
-    return o
+    db.refresh(row)
+    return CommentOut(id=row.id, text=row.text, author_id=row.author_id,
+                      author_name=ctx.user.full_name, created_at=row.created_at)
 
 
-# ---------- attachments ----------
-@router.post("/{task_id}/attachments", response_model=AttachmentOut, status_code=201)
-async def upload(task_id: int, file: UploadFile = File(...), kind: str = Form("during"),
-                 daily_progress_id: Optional[int] = Form(None), captured_at: Optional[datetime] = Form(None),
-                 ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("attachments.upload")
-    _can_act(ctx, t)
-    if t.status in ("done", "cancelled"):
-        raise validation("INVALID_TRANSITION", "Yopilgan vazifaga fayl qo'shib bo'lmaydi.")
-    if kind not in EVIDENCE_KINDS:
-        raise validation("VALIDATION", "Fayl turi noto'g'ri.", field_errors={"kind": "invalid"})
-    mime = (file.content_type or "").lower()
-    if mime not in fsvc.ALLOWED:
-        raise ApiError(415, "FILE_TYPE_NOT_ALLOWED", "Bu turdagi fayl qabul qilinmaydi.")
-    data = await file.read()
-    limit = settings.MAX_IMAGE_MB if mime in fsvc.IMAGE_MIMES else settings.MAX_DOC_MB
-    if len(data) > limit * 1024 * 1024:
-        raise ApiError(413, "FILE_TOO_LARGE", "Fayl hajmi chegaradan katta.")
-    if kind == "document" and mime in fsvc.IMAGE_MIMES:
-        pass
-    if kind != "document" and mime not in fsvc.IMAGE_MIMES:
-        raise ApiError(415, "FILE_TYPE_NOT_ALLOWED", "Foto turiga faqat rasm yuklanadi.")
-    key = fsvc.store(data, file.filename or "file")
-    att = TaskAttachment(task_id=t.id, daily_progress_id=daily_progress_id, kind=kind, storage_key=key,
-                         filename=file.filename or "file", mime_type=mime, size=len(data),
-                         captured_at=captured_at, source=ctx.source, uploaded_by=ctx.user.id)
-    db.add(att)
-    db.flush()
-    svc.bump(t)
-    svc.log(db, t, "attach", ctx, {}, {"kind": kind, "filename": att.filename, "size": att.size})
-    db.commit()
-    return attachment_out(db, att)
-
-
-@router.delete("/{task_id}/attachments/{att_id}", status_code=204)
-def delete_attachment(task_id: int, att_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    att = db.get(TaskAttachment, att_id)
-    if not att or att.task_id != t.id or not att.is_active:
-        raise not_found("Fayl")
-    if t.status == "done":
-        raise validation("INVALID_TRANSITION", "Bajarilgan vazifa fayllari o'chirilmaydi.")
-    if not (ctx.has("attachments.delete") or att.uploaded_by == ctx.user.id):
-        raise permission_denied()
-    att.is_active = False
-    svc.bump(t)
-    svc.log(db, t, "attachment_delete", ctx, {"filename": att.filename, "kind": att.kind}, {})
-    db.commit()
-    return Response(status_code=204)
-
-
-# ---------- comments ----------
-MENTION_RE = re.compile(r"@([\w.\-]+)")
-
-
-@router.get("/{task_id}/comments", response_model=List[CommentOut])
-def comments(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    rows = db.scalars(select(TaskComment).where(TaskComment.task_id == t.id).order_by(TaskComment.created_at)).all()
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_({r.author_id for r in rows} or {0})))}
-    out = []
-    for r in rows:
-        o = CommentOut.model_validate(r)
-        o.author_name = users[r.author_id].full_name if r.author_id in users else ""
-        out.append(o)
-    return out
-
-
-@router.post("/{task_id}/comments", response_model=CommentOut, status_code=201)
-def comment_add(task_id: int, body: CommentIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("comments.create")
-    handles = MENTION_RE.findall(body.text)
-    mentioned = db.scalars(select(User).where(User.login.in_(handles))).all() if handles else []
-    c = TaskComment(task_id=t.id, text=body.text.strip(), author_id=ctx.user.id,
-                    mentions_json=[u.id for u in mentioned], source=ctx.source)
-    db.add(c)
-    db.flush()
-    svc.log(db, t, "comment", ctx, {}, {"text": body.text[:200]})
-    targets = {u.id for u in mentioned}
-    svc.notify(db, targets, "mentioned", t, {"by": ctx.user.full_name, "text": body.text[:200]})
-    # non-mention comment notify: assignee & reviewer (in-app + telegram)
-    others = {t.assignee_id, t.reviewer_id} - {ctx.user.id} - targets
-    svc.notify(db, others, "comment", t, {"by": ctx.user.full_name, "text": body.text[:200]})
-    db.commit()
-    o = CommentOut.model_validate(c)
-    o.author_name = ctx.user.full_name
-    return o
-
-
-# ---------- history ----------
-@router.get("/{task_id}/history", response_model=List[HistoryOut])
+@router.get("/tasks/{task_id}/history", response_model=list[HistoryOut])
 def history(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    rows = db.scalars(select(TaskHistory).where(TaskHistory.task_id == t.id).order_by(TaskHistory.created_at.desc(), TaskHistory.id.desc())).all()
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_({r.actor_id for r in rows if r.actor_id} or {0})))}
-    out = []
-    for r in rows:
-        o = HistoryOut.model_validate(r)
-        o.actor_name = users[r.actor_id].full_name if r.actor_id in users else "Tizim"
-        out.append(o)
-    return out
-
-
-# ---------- dependencies ----------
-@router.post("/{task_id}/dependencies", response_model=TaskDetail, status_code=201)
-def dep_add(task_id: int, body: DependencyIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("tasks.edit")
-    d = svc.get_task_or_404(db, body.depends_on_task_id)
-    if d.id == t.id or d.project_id != t.project_id:
-        raise validation("VALIDATION", "Bog'liqlik noto'g'ri.")
-    if svc.has_cycle(db, t.id, d.id):
-        raise validation("DEPENDENCY_CYCLE", "Bog'liqlikda halqa hosil bo'ladi.")
-    if not db.get(TaskDependency, (t.id, d.id)):
-        db.add(TaskDependency(task_id=t.id, depends_on_task_id=d.id))
-        svc.bump(t)
-        svc.log(db, t, "dependency_add", ctx, {}, {"depends_on": d.code})
-        db.commit()
-    return get_detail(db, ctx, t)
-
-
-@router.delete("/{task_id}/dependencies/{dep_id}", response_model=TaskDetail)
-def dep_del(task_id: int, dep_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    t = load(db, ctx, task_id)
-    ctx.require("tasks.edit")
-    row = db.get(TaskDependency, (t.id, dep_id))
-    if row:
-        db.delete(row)
-        svc.bump(t)
-        svc.log(db, t, "dependency_remove", ctx, {"depends_on": dep_id}, {})
-        db.commit()
-    return get_detail(db, ctx, t)
+    t = _get(db, ctx, task_id)
+    rows = db.scalars(select(TaskHistory).where(TaskHistory.task_id == t.id)
+                      .order_by(TaskHistory.id)).all()
+    names = {u.id: u.full_name for u in db.scalars(
+        select(User).where(User.id.in_({r.actor_id for r in rows if r.actor_id} or {0})))}
+    return [HistoryOut(id=r.id, action=r.action, actor_id=r.actor_id,
+                       actor_name=names.get(r.actor_id, "tizim"),
+                       old_values_json=r.old_values_json or {}, new_values_json=r.new_values_json or {},
+                       created_at=r.created_at) for r in rows]

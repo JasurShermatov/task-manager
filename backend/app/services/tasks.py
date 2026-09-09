@@ -1,41 +1,32 @@
-"""Business rules: state machine, progress, code generation, history, notifications."""
+"""Vazifa domeni: kod berish, tarix, xabar navbati va ro'yxatni boyitish."""
 from __future__ import annotations
 
-from datetime import datetime, date
-from decimal import Decimal
-from typing import Optional, Iterable
+from datetime import datetime
+from typing import Iterable, Optional
 
-from sqlalchemy import select, func, text
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .. import clock
 from ..auth import Ctx
-from ..errors import validation, invalid_transition, ApiError, task_not_found
 from ..models import (
-    Task, TaskChecklistItem, TaskAttachment, TaskDependency, TaskHistory, TaskType, Notification, User,
-    TaskDailyProgress, Location, BLOCK_REASONS, TASK_STATUSES, PRIORITIES,
+    CANCELLED, DONE, MANAGERS, NEW, PROGRESS, SUBMITTED, Department, Notification, Task,
+    TaskComment, TaskFile, TaskHistory, User,
 )
+from ..roles import role_name
 
-TRANSITIONS = {
-    "plan": {"progress", "blocked", "cancelled"},
-    "progress": {"review", "blocked"},
-    "review": {"done", "progress"},
-    "done": {"progress"},        # only via reopen
-    "blocked": set(),            # only via unblock -> previous_status
-    "cancelled": set(),
-}
+# ---------------------------------------------------------------- vazifa kodi
+# Postgres'da ketma-ketlik, SQLite'da max(id). 1.0 da shu joyda prodda 500 chiqqan edi:
+# fake_data satrlarni to'g'ridan-to'g'ri yozgani uchun ketma-ketlik orqada qolib,
+# ikkinchi vazifada UNIQUE buzilgan. Shuning uchun next_code o'zini o'zi tuzatadi.
 
 
-def utcnow():
-    return datetime.utcnow()
-
-
-# ---------- helpers ----------
-def code_taken(db: Session, n) -> bool:
+def code_taken(db: Session, n: int) -> bool:
     return bool(db.execute(select(func.count()).select_from(Task).where(Task.code == f"V-{n}")).scalar())
 
 
 def max_code_num(db: Session) -> int:
-    """Mavjud eng katta V-<raqam> kodi (0 - hech narsa yo'q)."""
     if db.bind.dialect.name == "postgresql":
         return int(db.execute(text(
             "SELECT COALESCE(MAX(CAST(SUBSTRING(code FROM 3) AS BIGINT)), 0) "
@@ -48,9 +39,6 @@ def max_code_num(db: Session) -> int:
 
 
 def sync_code_sequence(db: Session) -> int:
-    """Postgres ketma-ketligini bazadagi eng katta koddan keyinga suradi.
-    Baza tashqaridan to'ldirilganda (fake_data, import, zaxiradan tiklash) ketma-ketlik
-    ma'lumotdan orqada qoladi va yangi vazifa yaratishda kod to'qnashadi -> 500."""
     if db.bind.dialect.name != "postgresql":
         return 0
     top = max(1000, max_code_num(db))
@@ -59,9 +47,6 @@ def sync_code_sequence(db: Session) -> int:
 
 
 def next_code(db: Session) -> str:
-    """Server-side task code. Postgres uses a sequence (safe under concurrency);
-    other dialects (tests) fall back to max(id). Ketma-ketlik ma'lumotdan orqada qolib
-    qolgan bo'lsa - o'zi tuzatib oladi."""
     if db.bind.dialect.name == "postgresql":
         n = db.execute(text("SELECT nextval('task_code_seq')")).scalar()
         if code_taken(db, n):
@@ -74,283 +59,168 @@ def next_code(db: Session) -> str:
     return f"V-{n}"
 
 
-def log(db: Session, task: Task, action: str, ctx: Optional[Ctx], old: dict | None = None, new: dict | None = None):
-    def clean(d):
-        out = {}
-        for k, v in (d or {}).items():
-            if isinstance(v, (datetime, date)):
-                v = v.isoformat()
-            elif isinstance(v, Decimal):
-                v = float(v)
-            out[k] = v
-        return out
-    db.add(TaskHistory(task_id=task.id, action=action, old_values_json=clean(old), new_values_json=clean(new),
-                       actor_id=ctx.user.id if ctx else None, source=ctx.source if ctx else "system",
-                       request_id=ctx.request_id if ctx else None))
+# ---------------------------------------------------------------- tarix va xabarlar
+def log(db: Session, task: Task, action: str, ctx: Optional[Ctx] = None,
+        old: Optional[dict] = None, new: Optional[dict] = None):
+    db.add(TaskHistory(task_id=task.id, action=action,
+                       old_values_json=old or {}, new_values_json=new or {},
+                       actor_id=ctx.user.id if ctx else None,
+                       source=ctx.source if ctx else "system"))
 
 
-def notify(db: Session, user_ids: Iterable[int], event: str, task: Task | None, payload: dict | None = None,
-           telegram: bool = True, inapp: bool = True):
-    payload = dict(payload or {})
-    if task:
-        payload.setdefault("task_id", task.id)
-        payload.setdefault("code", task.code)
-        payload.setdefault("title", task.title)
-    seen = set()
-    for uid in user_ids:
-        if not uid or uid in seen:
-            continue
-        seen.add(uid)
-        u = db.get(User, uid)
-        if not u or not u.is_active:
-            continue
-        if inapp:
-            db.add(Notification(user_id=uid, task_id=task.id if task else None, event=event,
-                                payload_json=payload, channel="inapp", status="sent", sent_at=utcnow()))
-        if telegram and u.telegram_user_id:
-            db.add(Notification(user_id=uid, task_id=task.id if task else None, event=event,
-                                payload_json=payload, channel="telegram", status="pending"))
+def notify(db: Session, user_id: Optional[int], event: str, task: Optional[Task] = None,
+           payload: Optional[dict] = None, dedupe_key: Optional[str] = None) -> bool:
+    """Telegram navbatiga qo'shadi. `dedupe_key` berilsa, o'sha kalit bilan ikkinchi marta
+    yozilmaydi — eslatma dvigateli shunga tayanadi (tekshiruv bazada, kodda emas)."""
+    if not user_id:
+        return False
+    row = Notification(user_id=user_id, task_id=task.id if task else None, event=event,
+                       payload_json=payload or {}, channel="telegram", dedupe_key=dedupe_key)
+    try:
+        with db.begin_nested():
+            db.add(row)
+        return True
+    except IntegrityError:
+        return False
 
 
-def recompute_progress(db: Session, task: Task):
-    items = db.scalars(select(TaskChecklistItem).where(TaskChecklistItem.task_id == task.id)).all()
-    if items:
-        done = sum(1 for i in items if i.is_done)
-        task.progress_percent = int(round(done / len(items) * 100))
-    elif task.planned_quantity and float(task.planned_quantity) > 0:
-        task.progress_percent = min(100, int(round(float(task.actual_quantity or 0) / float(task.planned_quantity) * 100)))
-    else:
-        task.progress_percent = 100 if task.status == "done" else 0
-    if task.status == "done":
-        task.progress_percent = 100
+def managers(db: Session, exclude: Optional[int] = None) -> list[User]:
+    q = select(User).where(User.role.in_(MANAGERS), User.is_active.is_(True))
+    return [u for u in db.scalars(q) if u.id != exclude]
 
 
-def recompute_quantity(db: Session, task: Task):
-    total = db.execute(
-        select(func.coalesce(func.sum(TaskDailyProgress.quantity), 0))
-        .where(TaskDailyProgress.task_id == task.id, TaskDailyProgress.is_duplicate == False)  # noqa
-    ).scalar()
-    task.actual_quantity = total or 0
-    task.quantity_over_plan = bool(task.planned_quantity and float(total or 0) > float(task.planned_quantity))
-    recompute_progress(db, task)
-
-
-def bump(task: Task):
-    task.row_version += 1
-    task.updated_at = utcnow()
-
-
-def get_task_or_404(db: Session, task_id: int) -> Task:
-    t = db.get(Task, task_id)
-    if not t or not t.is_active:
-        raise task_not_found()
-    return t
-
-
-def type_required_kinds(db: Session, task: Task) -> list:
-    tt = db.get(TaskType, task.type_id)
-    return list(tt.required_evidence_kinds or []) if tt else []
-
-
-# ---------- dependency checks ----------
-def has_cycle(db: Session, task_id: int, depends_on: int) -> bool:
-    """Would adding task_id -> depends_on create a cycle? (i.e. depends_on reaches task_id)"""
-    stack = [depends_on]
-    seen = set()
-    while stack:
-        cur = stack.pop()
-        if cur == task_id:
-            return True
-        if cur in seen:
-            continue
-        seen.add(cur)
-        for (d,) in db.execute(select(TaskDependency.depends_on_task_id).where(TaskDependency.task_id == cur)):
-            stack.append(d)
-    return False
-
-
-def pending_dependencies(db: Session, task: Task) -> list[Task]:
-    deps = db.scalars(
-        select(Task).join(TaskDependency, TaskDependency.depends_on_task_id == Task.id)
-        .where(TaskDependency.task_id == task.id, Task.status != "done", Task.is_active == True)  # noqa
-    ).all()
-    return deps
-
-
-# ---------- state machine ----------
-def transition(db: Session, ctx: Ctx, task: Task, to: str, note: Optional[str] = None,
-               block_reason: Optional[str] = None):
-    frm = task.status
-    if to not in TASK_STATUSES:
-        raise invalid_transition(frm, to)
-
-    if to == "blocked":
-        if frm in ("done", "cancelled", "blocked"):
-            raise invalid_transition(frm, to)
-        if block_reason not in BLOCK_REASONS or not (note or "").strip():
-            raise validation("BLOCK_REASON_REQUIRED", "Bloklash sababi va izohi majburiy.")
-        ctx.require("tasks.block")
-        old = {"status": frm}
-        task.previous_status, task.status = frm, "blocked"
-        task.blocked_reason, task.blocked_note, task.blocked_at = block_reason, note, utcnow()
-        bump(task)
-        log(db, task, "block", ctx, old, {"status": "blocked", "reason": block_reason, "note": note})
-        notify(db, prorab_and_rahbar_ids(db, task) | {task.reviewer_id}, "blocked", task,
-               {"reason": block_reason, "note": note, "urgent": True})
-        return
-
-    if frm == "blocked":
-        # unblock: only back to previous_status
-        prev = task.previous_status or "plan"
-        if to != prev:
-            raise invalid_transition(frm, to)
-        ctx.require("tasks.block")
-        old = {"status": frm}
-        task.status, task.previous_status = prev, None
-        task.blocked_reason = task.blocked_note = None
-        task.blocked_at = None
-        bump(task)
-        log(db, task, "unblock", ctx, old, {"status": prev})
-        return
-
-    if to not in TRANSITIONS.get(frm, set()):
-        raise invalid_transition(frm, to)
-
-    if frm == "plan" and to == "progress":
-        ctx.require("tasks.start")
-        if ctx.user.role.code == "bajaruvchi" and task.assignee_id != ctx.user.id:
-            raise ApiError(403, "SCOPE_FORBIDDEN", "Bu vazifa sizga biriktirilmagan.")
-        pend = pending_dependencies(db, task)
-        if pend:
-            raise ApiError(409, "DEPENDENCY_NOT_DONE", "Oldingi bog'liq vazifa hali tugamagan: " + ", ".join(p.code for p in pend),
-                           codes=[p.code for p in pend])
-        task.status = "progress"
-        task.actual_start = task.actual_start or utcnow()
-        bump(task)
-        log(db, task, "start", ctx, {"status": frm}, {"status": "progress"})
-        return
-
-    if frm == "progress" and to == "review":
-        ctx.require("tasks.submit_review")
-        if ctx.user.role.code == "bajaruvchi" and task.assignee_id != ctx.user.id:
-            raise ApiError(403, "SCOPE_FORBIDDEN", "Bu vazifa sizga biriktirilmagan.")
-        missing = [i.title for i in db.scalars(select(TaskChecklistItem).where(
-            TaskChecklistItem.task_id == task.id, TaskChecklistItem.is_required == True,  # noqa
-            TaskChecklistItem.is_done == False)).all()]  # noqa
-        if missing:
-            raise validation("REQUIRED_CHECKLIST", "Majburiy checklist bandlari bajarilmagan.", items=missing)
-        req = type_required_kinds(db, task)
-        have = set(k for (k,) in db.execute(select(TaskAttachment.kind).where(
-            TaskAttachment.task_id == task.id, TaskAttachment.is_active == True)))  # noqa
-        lack = [k for k in req if k not in have]
-        if lack:
-            raise validation("REQUIRED_EVIDENCE", "Majburiy foto biriktirilmagan.", kinds=lack)
-        task.status = "review"
-        task.review_started_at = utcnow()
-        bump(task)
-        log(db, task, "submit_review", ctx, {"status": frm}, {"status": "review"})
-        notify(db, [task.reviewer_id], "submitted_review", task, {"urgent": True})
-        return
-
-    if frm == "review" and to == "done":
-        ctx.require("tasks.accept")
-        if task.assignee_id == ctx.user.id:
-            raise ApiError(409, "SELF_ACCEPT_FORBIDDEN", "O'zingiz bajargan vazifani o'zingiz qabul qila olmaysiz.")
-        if ctx.user.role.code == "tekshiruvchi" and task.reviewer_id != ctx.user.id:
-            raise ApiError(403, "SCOPE_FORBIDDEN", "Siz bu vazifaning tekshiruvchisi emassiz.")
-        task.status = "done"
-        task.actual_end = utcnow()
-        task.progress_percent = 100
-        bump(task)
-        log(db, task, "accept", ctx, {"status": frm}, {"status": "done", "note": note})
-        notify(db, [task.assignee_id], "accepted", task)
-        return
-
-    if frm == "review" and to == "progress":
-        ctx.require("tasks.return")
-        if not (note or "").strip():
-            raise validation("RETURN_REASON_REQUIRED", "Qaytarish sababini yozing.")
-        task.status = "progress"
-        task.return_count += 1
-        task.review_started_at = None
-        bump(task)
-        log(db, task, "return", ctx, {"status": frm}, {"status": "progress", "reason": note, "return_count": task.return_count})
-        notify(db, [task.assignee_id], "returned", task, {"reason": note, "urgent": True})
-        return
-
-    if frm == "done" and to == "progress":
-        ctx.require("tasks.reopen")
-        task.status = "progress"
-        task.actual_end = None
-        bump(task)
-        log(db, task, "reopen", ctx, {"status": frm}, {"status": "progress", "note": note})
-        notify(db, [task.assignee_id, task.reviewer_id], "reopened", task, {"note": note})
-        return
-
-    if frm == "plan" and to == "cancelled":
-        ctx.require("tasks.delete")
-        task.status = "cancelled"
-        bump(task)
-        log(db, task, "cancel", ctx, {"status": frm}, {"status": "cancelled", "note": note})
-        notify(db, [task.assignee_id], "cancelled", task)
-        return
-
-    raise invalid_transition(frm, to)
-
-
-def prorab_and_rahbar_ids(db: Session, task: Task) -> set[int]:
-    """Everyone who supervises this task: its prorab (by block), its rahbar (by project),
-    the system/project administrators, and whoever created it."""
-    ids = set()
-    users = db.scalars(select(User).where(User.is_active == True)).all()  # noqa
-    from ..auth import location_in_scope
-    for u in users:
-        code = u.role.code
-        if code in ("admin", "rahbar"):
-            if u.scope_type == "system" or (u.scope_type == "project" and u.scope_id == task.project_id):
-                ids.add(u.id)
-        elif code == "prorab":
-            from ..auth import scope_project_id
-            in_block = u.scope_type == "location" and location_in_scope(db, task.location_id, u.scope_id)
-            # joysiz (butun obyekt bo'yicha) vazifa - o'sha loyihaning barcha prorablariga tegishli
-            project_wide = (u.scope_type == "location" and task.location_id is None
-                            and scope_project_id(db, u) == task.project_id)
-            if u.scope_type == "system" or (u.scope_type == "project" and u.scope_id == task.project_id) \
-               or in_block or project_wide:
-                ids.add(u.id)
-    ids.add(task.created_by)
-    return ids
-
-
-# kept as the readable alias used by newer code
-supervisor_ids = prorab_and_rahbar_ids
-
-
-# ---------- permissions object for UI ----------
-def task_permissions(db: Session, ctx: Ctx, task: Task) -> dict:
-    u = ctx.user
-    role = u.role.code
-    p = ctx.perms
-    mine = task.assignee_id == u.id
-    is_reviewer = task.reviewer_id == u.id
-    st = task.status
-    can_actor = (role != "bajaruvchi") or mine
+def task_payload(db: Session, task: Task, **extra) -> dict:
+    a = db.get(User, task.assignee_id)
+    dep = db.get(Department, a.department_id) if a and a.department_id else None
+    late = task.late_seconds(clock.now())
     return {
-        "edit": "tasks.edit" in p and st not in ("done", "cancelled"),
-        "change_dates": "tasks.change_dates" in p,
-        "assign": "tasks.assign" in p,
-        "start": "tasks.start" in p and st == "plan" and can_actor,
-        "submit_review": "tasks.submit_review" in p and st == "progress" and can_actor,
-        "accept": "tasks.accept" in p and st == "review" and not mine and (role != "tekshiruvchi" or is_reviewer),
-        "return": "tasks.return" in p and st == "review" and (role != "tekshiruvchi" or is_reviewer),
-        "block": "tasks.block" in p and st in ("plan", "progress", "review") and can_actor,
-        "unblock": "tasks.block" in p and st == "blocked",
-        "reopen": "tasks.reopen" in p and st == "done",
-        "cancel": "tasks.delete" in p and st == "plan",
-        "delete": "tasks.delete" in p and st != "done",
-        "checklist": "checklist.edit" in p and st in ("plan", "progress", "review") and can_actor,
-        "progress": "progress.create" in p and st in ("progress", "blocked") and can_actor,
-        "upload": "attachments.upload" in p and st not in ("done", "cancelled") and can_actor,
-        "delete_attachment": "attachments.delete" in p and st != "done",
-        "comment": "comments.create" in p,
+        "id": task.id, "code": task.code, "title": task.title,
+        "assignee_name": a.full_name if a else "", "assignee_id": task.assignee_id,
+        "department": dep.name if dep else None,
+        "due_at": task.due_at.isoformat(timespec="minutes"),
+        "status": task.status, "late_hours": late // 3600, "late_days": late // 86400,
+        **extra,
     }
+
+
+def notify_managers(db: Session, event: str, task: Task, exclude: Optional[int] = None, **extra):
+    payload = task_payload(db, task, **extra)
+    for m in managers(db, exclude=exclude):
+        notify(db, m.id, event, task, payload)
+
+
+# ---------------------------------------------------------------- ruxsatlar (UI uchun)
+def task_perms(ctx: Ctx, task: Task) -> dict:
+    mine = task.assignee_id == ctx.user.id
+    mgr = ctx.is_manager
+    open_ = task.status in (NEW, PROGRESS)
+    return {
+        "start": mine and task.status == NEW,
+        "submit": mine and open_,
+        "accept": mgr and task.status == SUBMITTED,
+        "return": mgr and task.status == SUBMITTED,
+        "edit": mgr and task.status not in (DONE, CANCELLED),
+        "cancel": mgr and task.status not in (DONE, CANCELLED),
+        "comment": True,
+        "upload": mine or mgr,
+    }
+
+
+# ---------------------------------------------------------------- ro'yxatni boyitish
+def enrich(db: Session, tasks: list[Task], ctx: Ctx, *, detail: bool = False) -> list[dict]:
+    """Bitta so'rovda hamma ismni yig'ib chiqadi — N+1 bo'lmasin."""
+    if not tasks:
+        return []
+    ref = clock.now()
+    ids = {t.id for t in tasks}
+    uids = {t.assignee_id for t in tasks} | {t.created_by for t in tasks}
+    uids |= {t.accepted_by for t in tasks if t.accepted_by}
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(uids)))}
+    deps = {d.id: d for d in db.scalars(select(Department))}
+
+    proofs: dict[int, int] = {}
+    for tid, n in db.execute(
+            select(TaskFile.task_id, func.count()).where(
+                TaskFile.task_id.in_(ids), TaskFile.is_active.is_(True), TaskFile.kind == "proof"
+            ).group_by(TaskFile.task_id)):
+        proofs[tid] = n
+    comments: dict[int, int] = {}
+    for tid, n in db.execute(
+            select(TaskComment.task_id, func.count()).where(TaskComment.task_id.in_(ids))
+            .group_by(TaskComment.task_id)):
+        comments[tid] = n
+
+    out = []
+    for t in tasks:
+        a = users.get(t.assignee_id)
+        dep = deps.get(a.department_id) if a and a.department_id else None
+        late = t.late_seconds(ref)
+        row = {
+            "id": t.id, "code": t.code, "title": t.title, "description": t.description,
+            "status": t.status,
+            "assignee_id": t.assignee_id,
+            "assignee_name": a.full_name if a else "—",
+            "assignee_role": a.role if a else "",
+            "department_id": dep.id if dep else None,
+            "department_name": dep.name if dep else None,
+            "created_by": t.created_by,
+            "created_by_name": users[t.created_by].full_name if t.created_by in users else "—",
+            "due_at": t.due_at, "original_due_at": t.original_due_at,
+            "started_at": t.started_at, "submitted_at": t.submitted_at, "submit_note": t.submit_note,
+            "done_at": t.done_at, "accepted_by": t.accepted_by,
+            "accepted_by_name": users[t.accepted_by].full_name if t.accepted_by in users else None,
+            "return_count": t.return_count, "due_changed_count": t.due_changed_count,
+            "row_version": t.row_version, "created_at": t.created_at,
+            # ochiq vazifa uchun "hozir kechikkan", bajarilgani uchun "kechikib topshirilgan"
+            "is_late": late > 0,
+            "late_days": late // 86400, "late_hours": late // 3600,
+            "proof_count": proofs.get(t.id, 0), "comment_count": comments.get(t.id, 0),
+            "permissions": task_perms(ctx, t),
+            "files": [], "comments": [],
+        }
+        out.append(row)
+    return out
+
+
+def with_files(db: Session, row: dict, task: Task) -> dict:
+    from .files import signed_url
+    files = db.scalars(select(TaskFile).where(TaskFile.task_id == task.id, TaskFile.is_active.is_(True))
+                       .order_by(TaskFile.id)).all()
+    row["files"] = [{"id": f.id, "kind": f.kind, "filename": f.filename, "mime_type": f.mime_type,
+                     "size": f.size, "url": signed_url(f.id), "created_at": f.created_at} for f in files]
+    cs = db.scalars(select(TaskComment).where(TaskComment.task_id == task.id)
+                    .order_by(TaskComment.id)).all()
+    names = {u.id: u.full_name for u in db.scalars(
+        select(User).where(User.id.in_({c.author_id for c in cs} or {0})))}
+    row["comments"] = [{"id": c.id, "text": c.text, "author_id": c.author_id,
+                        "author_name": names.get(c.author_id, "—"), "created_at": c.created_at} for c in cs]
+    return row
+
+
+def user_out(db: Session, u: User, lang: str = "uz", counts: Optional[dict] = None) -> dict:
+    counts = counts or {}
+    return {
+        "id": u.id, "full_name": u.full_name, "login": u.login, "role": u.role,
+        "role_name": role_name(u.role, lang), "position": u.position, "phone": u.phone,
+        "department_id": u.department_id,
+        "department_name": u.department.name if u.department else None,
+        "lang": u.lang, "telegram_user_id": u.telegram_user_id, "is_active": u.is_active,
+        "open_tasks": counts.get("open", 0), "late_tasks": counts.get("late", 0),
+    }
+
+
+def task_counts(db: Session, user_ids: Iterable[int]) -> dict[int, dict]:
+    """Har bir odam uchun ochiq va kechikkan vazifalar soni."""
+    ids = list(user_ids)
+    if not ids:
+        return {}
+    ref = clock.now()
+    out: dict[int, dict] = {i: {"open": 0, "late": 0} for i in ids}
+    rows = db.execute(
+        select(Task.assignee_id, Task.status, Task.due_at)
+        .where(Task.assignee_id.in_(ids), Task.status.in_((NEW, PROGRESS, SUBMITTED))))
+    for aid, status, due in rows:
+        out[aid]["open"] += 1
+        if status in (NEW, PROGRESS) and due < ref:
+            out[aid]["late"] += 1
+    return out

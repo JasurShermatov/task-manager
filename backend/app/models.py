@@ -1,62 +1,59 @@
+"""SAFF Vazifalar 2.0 — baza modeli.
+
+Tuzilma: boss va assistant (teng huquq) vazifa beradi; bo'lim boshliqlari va asosiy bo'lim
+ijrochilari vazifani dalil bilan topshiradi. Obyekt/loyiha/ish turi tuzilmasi yo'q —
+vazifa faqat odamga beriladi.
+
+Vaqt: domen ustunlari mahalliy vaqtda (`clock.now`), refresh token esa UTC'da (`auth.py`).
+"""
 from __future__ import annotations
 
-from datetime import datetime, date
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text,
-    UniqueConstraint, func, JSON,
+    BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .clock import now
 from .db import Base
 
-# SQLite only autoincrements plain INTEGER primary keys; Postgres keeps BIGINT.
+# SQLite faqat oddiy INTEGER birlamchi kalitni avtomatik oshiradi; Postgres BIGINT'da qoladi.
 PK = BigInteger().with_variant(Integer, "sqlite")
 
-TASK_STATUSES = ("plan", "progress", "review", "done", "blocked", "cancelled")
-PRIORITIES = ("low", "normal", "high")
-SCOPES = ("system", "project", "location")
-SOURCES = ("web", "mobile", "bot", "system")
-EVIDENCE_KINDS = ("before", "during", "after", "document")
-BLOCK_REASONS = (
-    "material_yoq", "hujjat_kutilmoqda", "texnika_band", "ishchi_yetmadi",
-    "oldingi_ish", "obhavo", "qaror_kutilmoqda", "boshqa",
-)
+# --- rollar ---
+BOSS = "boss"
+ASSISTANT = "assistant"
+HEAD = "bolim_boshligi"      # tashqi bo'lim boshlig'i (ostidagi ishchilar platformada yo'q)
+WORKER = "ijrochi"           # asosiy bo'lim xodimi
+ROLES = (BOSS, ASSISTANT, HEAD, WORKER)
+MANAGERS = (BOSS, ASSISTANT)         # to'liq huquq: vazifa beradi, qabul qiladi, CRUD qiladi
+PERFORMERS = (HEAD, WORKER)          # vazifa oladi va topshiradi
+
+# --- vazifa holatlari ---
+NEW = "new"
+PROGRESS = "progress"
+SUBMITTED = "submitted"
+DONE = "done"
+CANCELLED = "cancelled"
+TASK_STATUSES = (NEW, PROGRESS, SUBMITTED, DONE, CANCELLED)
+OPEN_STATUSES = (NEW, PROGRESS)      # eslatma yuboriladigan holatlar
+
+FILE_KINDS = ("task", "proof")       # vazifa bilan berilgan fayl / topshirishdagi dalil
+SOURCES = ("web", "bot", "system")
 LANGS = ("uz", "ru", "en")
 
 
-def now():
-    return datetime.utcnow()
-
-
-class Project(Base):
-    __tablename__ = "projects"
+class Department(Base):
+    """Tashqi bo'lim. Boshlig'i — `User.department_id` shu bo'limga qaragan `bolim_boshligi`.
+    Boshliq alohida ustun emas: bitta haqiqat manbai bo'lsin va aylanma FK bo'lmasin."""
+    __tablename__ = "departments"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(32), unique=True)
-    name: Mapped[str] = mapped_column(String(200))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-
-
-class Location(Base):
-    __tablename__ = "locations"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
-    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("locations.id"), nullable=True)
-    name: Mapped[str] = mapped_column(String(120))
-    kind: Mapped[str] = mapped_column(String(10))  # block/floor/zone
+    name: Mapped[str] = mapped_column(String(150))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
-class Role(Base):
-    __tablename__ = "roles"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(32), unique=True)
-    name: Mapped[str] = mapped_column(String(100))
-    permissions_json: Mapped[list] = mapped_column(JSON, default=list)
-    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class User(Base):
@@ -65,18 +62,25 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(200))
     login: Mapped[str] = mapped_column(String(64), unique=True)
     phone: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    email: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(200))
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
-    scope_type: Mapped[str] = mapped_column(String(10), default="system")
-    scope_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    role: Mapped[str] = mapped_column(String(16), default=WORKER, index=True)
+    # Lavozim — erkin matn (Buxgalter, Ta'minotchi...). Hech qanday huquq bermaydi:
+    # hisobotda, filtrda va ovozli vazifada odamni topishda ishlatiladi.
+    position: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Faqat bo'lim boshlig'ida to'ldiriladi. Ijrochida bo'sh — u asosiy bo'lim xodimi.
+    department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
     lang: Mapped[str] = mapped_column(String(2), default="uz")
     telegram_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True, nullable=True)
     telegram_linked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    role: Mapped[Role] = relationship(lazy="joined")
+
+    department: Mapped[Optional[Department]] = relationship(lazy="joined")
+
+    @property
+    def is_manager(self) -> bool:
+        return self.role in MANAGERS
 
 
 class RefreshToken(Base):
@@ -88,121 +92,65 @@ class RefreshToken(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class TaskType(Base):
-    __tablename__ = "task_types"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(150))
-    group_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    default_duration_days: Mapped[int] = mapped_column(Integer, default=3)
-    required_evidence_kinds: Mapped[list] = mapped_column(JSON, default=list)
-    default_checklist_json: Mapped[list] = mapped_column(JSON, default=list)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
-class TaskTemplate(Base):
-    __tablename__ = "task_templates"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(150))
-    type_id: Mapped[int] = mapped_column(ForeignKey("task_types.id"))
-    title_pattern: Mapped[str] = mapped_column(String(250))
-    default_duration_days: Mapped[int] = mapped_column(Integer, default=3)
-    checklist_json: Mapped[list] = mapped_column(JSON, default=list)
-    required_evidence_kinds: Mapped[list] = mapped_column(JSON, default=list)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
 class Task(Base):
     __tablename__ = "tasks"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(20), unique=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
-    location_id: Mapped[Optional[int]] = mapped_column(ForeignKey("locations.id"), nullable=True)
-    type_id: Mapped[int] = mapped_column(ForeignKey("task_types.id"))
     title: Mapped[str] = mapped_column(String(250))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(12), default="plan")
-    previous_status: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
-    priority: Mapped[str] = mapped_column(String(8), default="normal")
-    assignee_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    planned_start: Mapped[date] = mapped_column(Date)
-    planned_end: Mapped[date] = mapped_column(Date)
-    actual_start: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    actual_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    review_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
-    planned_quantity: Mapped[Optional[float]] = mapped_column(Numeric(18, 4), nullable=True)
-    actual_quantity: Mapped[float] = mapped_column(Numeric(18, 4), default=0)
-    unit: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    planned_crew_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    blocked_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    blocked_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    blocked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    return_count: Mapped[int] = mapped_column(Integer, default=0)
-    quantity_over_plan: Mapped[bool] = mapped_column(Boolean, default=False)
-    template_id: Mapped[Optional[int]] = mapped_column(ForeignKey("task_templates.id"), nullable=True)
-    row_version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(12), default=NEW, index=True)
+    assignee_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    # Muddat sana + soat: "1 soat kechikdi" ni hisoblash uchun soat shart.
+    due_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    submit_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    accepted_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    return_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Qaytarilgandan keyin eski dalillar hisobga olinmasin — yangi dalil talab qilinadi.
+    last_returned_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    due_changed_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Vazifa berilgandagi dastlabki muddat — muddat surilsa ham "aslida qachonga edi" qoladi.
+    original_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    row_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     __table_args__ = (
-        Index("ix_tasks_project_status", "project_id", "status"),
         Index("ix_tasks_assignee_status", "assignee_id", "status"),
-        Index("ix_tasks_reviewer_status", "reviewer_id", "status"),
-        Index("ix_tasks_planned_end", "planned_end"),
-        Index("ix_tasks_location", "location_id"),
+        Index("ix_tasks_status_due", "status", "due_at"),
     )
 
+    @property
+    def is_open(self) -> bool:
+        return self.status in OPEN_STATUSES
 
-class TaskDependency(Base):
-    __tablename__ = "task_dependencies"
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
-    depends_on_task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), primary_key=True)
+    def late_seconds(self, ref: datetime) -> int:
+        """Necha soniya kechikkani. Topshirilgan bo'lsa — topshirish vaqtiga qarab o'lchanadi
+        (odam vaqtida topshirgan bo'lsa, boss kech qabul qilgani uni kechiktirmaydi)."""
+        if self.status == CANCELLED:
+            return 0
+        end = self.submitted_at or ref
+        return max(0, int((end - self.due_at).total_seconds()))
 
 
-class TaskChecklistItem(Base):
-    __tablename__ = "task_checklist_items"
+class TaskFile(Base):
+    __tablename__ = "task_files"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
-    title: Mapped[str] = mapped_column(String(250))
-    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_done: Mapped[bool] = mapped_column(Boolean, default=False)
-    done_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-    done_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    sort_order: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class TaskDailyProgress(Base):
-    __tablename__ = "task_daily_progress"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
-    date: Mapped[date] = mapped_column(Date)
-    quantity: Mapped[Optional[float]] = mapped_column(Numeric(18, 4), nullable=True)
-    workers_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    work_hours: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
-    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    source: Mapped[str] = mapped_column(String(8), default="web")
-    is_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    __table_args__ = (Index("ix_daily_task_date", "task_id", "date"),)
-
-
-class TaskAttachment(Base):
-    __tablename__ = "task_attachments"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
-    daily_progress_id: Mapped[Optional[int]] = mapped_column(ForeignKey("task_daily_progress.id"), nullable=True)
-    kind: Mapped[str] = mapped_column(String(10))
+    kind: Mapped[str] = mapped_column(String(8), default="proof")
     storage_key: Mapped[str] = mapped_column(String(300))
     filename: Mapped[str] = mapped_column(String(250))
     mime_type: Mapped[str] = mapped_column(String(100))
     size: Mapped[int] = mapped_column(BigInteger)
-    captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    source: Mapped[str] = mapped_column(String(8), default="web")
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    source: Mapped[str] = mapped_column(String(8), default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -213,48 +161,39 @@ class TaskComment(Base):
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
     author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    mentions_json: Mapped[list] = mapped_column(JSON, default=list)
     source: Mapped[str] = mapped_column(String(8), default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class TaskHistory(Base):
     __tablename__ = "task_history"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"))
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
     action: Mapped[str] = mapped_column(String(40))
     old_values_json: Mapped[dict] = mapped_column(JSON, default=dict)
     new_values_json: Mapped[dict] = mapped_column(JSON, default=dict)
     actor_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     source: Mapped[str] = mapped_column(String(8), default="web")
-    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (Index("ix_history_task_created", "task_id", "created_at"),)
 
 
-class TaskRecurringRule(Base):
-    __tablename__ = "task_recurring_rules"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    template_id: Mapped[int] = mapped_column(ForeignKey("task_templates.id"))
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
-    location_id: Mapped[Optional[int]] = mapped_column(ForeignKey("locations.id"), nullable=True)
-    assignee_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    rrule: Mapped[str] = mapped_column(String(120))  # FREQ=DAILY | FREQ=WEEKLY;BYDAY=MO,WE,FR
-    next_run_at: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-
 class Notification(Base):
+    """Telegram uchun outbox va eslatmalarning takrorlanmasligini ta'minlaydigan jurnal.
+
+    `dedupe_key` — eslatma dvigatelining kaliti: scheduler har 5 daqiqada ishlaydi, ammo
+    "bugungi 09:00 eslatmasi" bir marta yoziladi. Unique cheklov shu ishni bazaga yuklaydi,
+    kod tomonda "yubordimmi" degan tekshiruv kerak emas.
+    """
     __tablename__ = "notifications"
     id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     task_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     event: Mapped[str] = mapped_column(String(40))
     payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    channel: Mapped[str] = mapped_column(String(10))  # inapp | telegram
-    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending sent failed
+    channel: Mapped[str] = mapped_column(String(10), default="telegram")
+    status: Mapped[str] = mapped_column(String(10), default="pending")   # pending | sent | failed
+    dedupe_key: Mapped[Optional[str]] = mapped_column(String(120), unique=True, nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -270,21 +209,9 @@ class TelegramLinkCode(Base):
 
 
 class AppSetting(Base):
-    """Kod tegmasdan o'zgaradigan sozlamalar (masalan bot username)."""
+    """Kod tegmasdan o'zgaradigan sozlamalar: bot username, eslatma soatlari."""
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
     updated_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
-
-
-class Job(Base):
-    __tablename__ = "jobs"
-    id: Mapped[int] = mapped_column(PK, primary_key=True, autoincrement=True)
-    kind: Mapped[str] = mapped_column(String(30))
-    status: Mapped[str] = mapped_column(String(12), default="queued")
-    total: Mapped[int] = mapped_column(Integer, default=0)
-    done: Mapped[int] = mapped_column(Integer, default=0)
-    result_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
