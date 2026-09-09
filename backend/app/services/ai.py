@@ -11,6 +11,7 @@ Ikki joyda aniqlik oshiriladi:
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -26,6 +27,8 @@ from ..config import settings
 from ..errors import validation
 from ..models import MANAGERS, NEW, PROGRESS, Department, Task, User
 from ..roles import role_name
+
+log = logging.getLogger("ai")
 
 OPENAI_URL = "https://api.openai.com/v1"
 CONFIDENT_SCORE = 85       # avtomatik tanlash uchun minimal ball
@@ -60,21 +63,51 @@ def _key() -> str:
     return settings.OPENAI_API_KEY
 
 
+def _fail(what: str, r: httpx.Response, fallback: str):
+    """OpenAI xatosini LOGGA chiqaradi va odamga tushunarli sabab aytadi.
+
+    Ilgari sabab faqat javob ichida qaytardi va hech qayerda yozilmasdi — natijada
+    botda "Qayta urinib ko'ring" chiqib, nima bo'lganini bilishning iloji yo'q edi.
+    """
+    body = r.text[:500]
+    log.error("OpenAI %s xato: HTTP %s — %s", what, r.status_code, body)
+    msg = {
+        401: "Ovoz xizmati kaliti noto'g'ri yoki eskirgan (OPENAI_API_KEY).",
+        403: "Ovoz xizmatiga ruxsat yo'q — kalit bu modelga kirolmaydi.",
+        404: "Ovoz xizmatida model topilmadi (OPENAI_STT_MODEL / OPENAI_LLM_MODEL).",
+        429: "Ovoz xizmati limiti tugagan yoki hisobda mablag' yo'q.",
+    }.get(r.status_code)
+    if r.status_code >= 500:
+        msg = "Ovoz xizmati javob bermayapti. Bir daqiqadan keyin urinib ko'ring."
+    # DIQQAT: "status" nomini ishlatib bo'lmaydi — ApiError'ning birinchi parametri shunday
+    # ataladi va nom to'qnashadi. Shuning uchun "http_status".
+    raise validation("VOICE_FAILED", msg or fallback, detail=body[:300], http_status=r.status_code)
+
+
 def transcribe(audio: bytes, filename: str = "voice.ogg", lang: str = "uz",
                vocab: Optional[list[str]] = None) -> str:
     prompt = "Qurilish kompaniyasi vazifalari."
     if vocab:
         joined = ", ".join(vocab)
         prompt += " Nomlar: " + joined[:VOCAB_LIMIT]
-    with httpx.Client(timeout=120) as c:
-        r = c.post(f"{OPENAI_URL}/audio/transcriptions",
-                   headers={"Authorization": f"Bearer {_key()}"},
-                   files={"file": (filename, audio, "application/octet-stream")},
-                   data={"model": settings.OPENAI_STT_MODEL, "language": lang, "prompt": prompt})
+    data = {"model": settings.OPENAI_STT_MODEL, "language": lang, "prompt": prompt}
+    try:
+        with httpx.Client(timeout=120) as c:
+            r = c.post(f"{OPENAI_URL}/audio/transcriptions",
+                       headers={"Authorization": f"Bearer {_key()}"},
+                       files={"file": (filename, audio, "application/octet-stream")},
+                       data=data)
+    except httpx.HTTPError as e:   # tarmoq: DNS, ulanmadi, vaqt tugadi
+        log.error("OpenAI ga ulanib bo'lmadi (%s): %s", type(e).__name__, e)
+        raise validation("VOICE_FAILED",
+                         "Ovoz xizmatiga ulanib bo'lmadi — serverda internet yo'q yoki sekin.")
     if r.status_code >= 400:
-        raise validation("VOICE_FAILED", "Ovozni matnga o'girib bo'lmadi. Qayta urinib ko'ring.",
-                         detail=r.text[:300])
-    return (r.json().get("text") or "").strip()
+        _fail("transcribe", r, "Ovozni matnga o'girib bo'lmadi. Qayta urinib ko'ring.")
+    text = (r.json().get("text") or "").strip()
+    if not text:
+        raise validation("VOICE_FAILED", "Ovozda gap eshitilmadi. Yaqinroq va sekinroq gapiring.")
+    log.info("transcribe: %s belgi (%s)", len(text), settings.OPENAI_STT_MODEL)
+    return text
 
 
 def llm_extract(text: str, today: date, context: str = "") -> dict:
@@ -82,12 +115,16 @@ def llm_extract(text: str, today: date, context: str = "") -> dict:
             "temperature": 0,
             "messages": [{"role": "system", "content": SYSTEM},
                          {"role": "user", "content": f"TODAY={today.isoformat()}\n{context}\n\nMATN:\n{text}"}]}
-    with httpx.Client(timeout=60) as c:
-        r = c.post(f"{OPENAI_URL}/chat/completions",
-                   headers={"Authorization": f"Bearer {_key()}"}, json=body)
+    try:
+        with httpx.Client(timeout=60) as c:
+            r = c.post(f"{OPENAI_URL}/chat/completions",
+                       headers={"Authorization": f"Bearer {_key()}"}, json=body)
+    except httpx.HTTPError as e:
+        log.error("OpenAI ga ulanib bo'lmadi (%s): %s", type(e).__name__, e)
+        raise validation("VOICE_FAILED",
+                         "Ovoz xizmatiga ulanib bo'lmadi — serverda internet yo'q yoki sekin.")
     if r.status_code >= 400:
-        raise validation("VOICE_FAILED", "Matnni tushunib bo'lmadi. Qayta urinib ko'ring.",
-                         detail=r.text[:300])
+        _fail("chat", r, "Matnni tushunib bo'lmadi. Qayta urinib ko'ring.")
     try:
         return json.loads(r.json()["choices"][0]["message"]["content"])
     except (KeyError, ValueError, IndexError):
