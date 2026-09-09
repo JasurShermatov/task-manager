@@ -78,3 +78,69 @@ def test_missing_key_is_a_separate_case(monkeypatch):
     with pytest.raises(ApiError) as e:
         ai.transcribe(b"audio")
     assert e.value.code == "VOICE_NOT_CONFIGURED"
+
+
+# ---------------------------------------------------------------- til kodi
+class _Spy:
+    """Yuborilgan so'rovlarni yozib boradi va tayyor javob qaytaradi."""
+
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.sent: list[dict] = []
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+    def post(self, url, headers=None, files=None, data=None, **kw):
+        self.sent.append(dict(data or {}))
+        return self.responses.pop(0)
+
+
+def _spy(monkeypatch, *responses) -> _Spy:
+    spy = _Spy(*responses)
+    monkeypatch.setattr(ai.settings, "OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(ai.httpx, "Client", lambda **kw: spy)
+    return spy
+
+
+def test_uzbek_goes_in_the_prompt_not_the_language_field(monkeypatch):
+    """gpt-4o-transcribe "uz" kodini rad etadi. Til nomi so'rov matnida aytiladi —
+    OpenAI'ning o'z maslahati, va aniqlikka ham yordam beradi."""
+    spy = _spy(monkeypatch, _resp(200, '{"text":"Ombor hisobotini tayyorla"}'))
+    assert ai.transcribe(b"audio", lang="uz") == "Ombor hisobotini tayyorla"
+    sent = spy.sent[0]
+    assert "language" not in sent, "uz parametr sifatida yuborilmasligi kerak"
+    assert "o'zbek" in sent["prompt"]
+    assert len(spy.sent) == 1, "bitta so'rov yetarli - qayta urinish bo'lmasin"
+
+
+def test_russian_still_uses_the_language_field(monkeypatch):
+    spy = _spy(monkeypatch, _resp(200, '{"text":"Готово"}'))
+    ai.transcribe(b"audio", lang="ru")
+    assert spy.sent[0]["language"] == "ru"
+
+
+def test_a_rejected_language_is_retried_without_it(monkeypatch):
+    """Modellar va ular qo'llaydigan tillar o'zgarib turadi. Kod rad etilsa,
+    bir marta parametrsiz qaytariladi — foydalanuvchi xatoni umuman ko'rmaydi."""
+    bad = _resp(400, '{"error":{"message":"Language code not recognized",'
+                     '"param": "language","code":"invalid_value"}}')
+    spy = _spy(monkeypatch, bad, _resp(200, '{"text":"Bajarildi"}'))
+    assert ai.transcribe(b"audio", lang="ru") == "Bajarildi"
+    assert len(spy.sent) == 2
+    assert "language" in spy.sent[0] and "language" not in spy.sent[1]
+
+
+def test_other_400_errors_are_not_retried(monkeypatch):
+    """Faqat til kodi qayta uriniladi — qolgan xatolarda ikkinchi so'rov ortiqcha."""
+    spy = _spy(monkeypatch, _resp(400, '{"error":{"message":"Unsupported file","param":"file"}}'))
+    with pytest.raises(ApiError):
+        ai.transcribe(b"audio", lang="ru")
+    assert len(spy.sent) == 1
+
+
+def test_names_from_the_database_are_given_to_the_model(monkeypatch):
+    """Lug'at bo'lmasa o'zbekcha ismlar noto'g'ri eshitiladi."""
+    spy = _spy(monkeypatch, _resp(200, '{"text":"ok"}'))
+    ai.transcribe(b"audio", lang="uz", vocab=["Akmal Sobirov", "Dilshod Nazarov"])
+    assert "Akmal Sobirov" in spy.sent[0]["prompt"]

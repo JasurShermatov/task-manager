@@ -201,6 +201,19 @@ Xato bo'lsa «Tahrirlash» — vazifa oddiy matn bo'lib chiqadi, nusxa olib tuza
 Sana gap bilan tushuniladi: «ertaga», «ertaga kechgacha», «3 kun», «15.09.2026 14:00».
 Ism topilmasa taxmin qilinmaydi — tugma bo'lib chiqadi.
 
+**Til.** `gpt-4o-transcribe` `uz` kodini qabul qilmaydi, shuning uchun o'zbek tili
+so'rov *matnida* aytiladi (OpenAI shuni maslahat beradi). Model biror til kodini rad
+etsa, kod bir marta o'sha parametrsiz qayta yuboradi — foydalanuvchi xatoni ko'rmaydi.
+
+**Sozlanganini tekshirish:**
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm api python -m app.voice_check
+```
+
+Kalit, ulanish va `.env` dagi modellar shu kalitda bor-yo'qligini bir yo'la aytadi.
+Xato bo'lsa sababi `docker compose logs api` da to'liq yoziladi.
+
 ---
 
 ## 7. Web

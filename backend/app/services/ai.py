@@ -79,28 +79,47 @@ def _fail(what: str, r: httpx.Response, fallback: str):
     }.get(r.status_code)
     if r.status_code >= 500:
         msg = "Ovoz xizmati javob bermayapti. Bir daqiqadan keyin urinib ko'ring."
-    # DIQQAT: "status" nomini ishlatib bo'lmaydi — ApiError'ning birinchi parametri shunday
-    # ataladi va nom to'qnashadi. Shuning uchun "http_status".
     raise validation("VOICE_FAILED", msg or fallback, detail=body[:300], http_status=r.status_code)
 
 
-def transcribe(audio: bytes, filename: str = "voice.ogg", lang: str = "uz",
-               vocab: Optional[list[str]] = None) -> str:
-    prompt = "Qurilish kompaniyasi vazifalari."
-    if vocab:
-        joined = ", ".join(vocab)
-        prompt += " Nomlar: " + joined[:VOCAB_LIMIT]
-    data = {"model": settings.OPENAI_STT_MODEL, "language": lang, "prompt": prompt}
+# Til: `gpt-4o-transcribe` hamma ISO kodini qabul qilmaydi — "uz" ni rad etadi:
+#   «Language code 'uz' is not recognized. Try adding the language name to your prompt.»
+# Shuning uchun qabul qilinadigan tillarda parametr yuboriladi, qolganida esa til NOMI
+# so'rov matnida aytiladi. Bu OpenAI'ning o'z maslahati va aniqlikni ham oshiradi.
+STT_LANG_PARAM = {"ru", "en"}
+LANG_NAME = {"uz": "o'zbek", "ru": "rus", "en": "ingliz"}
+
+
+def _stt_request(audio: bytes, filename: str, data: dict) -> httpx.Response:
     try:
         with httpx.Client(timeout=120) as c:
-            r = c.post(f"{OPENAI_URL}/audio/transcriptions",
-                       headers={"Authorization": f"Bearer {_key()}"},
-                       files={"file": (filename, audio, "application/octet-stream")},
-                       data=data)
+            return c.post(f"{OPENAI_URL}/audio/transcriptions",
+                          headers={"Authorization": f"Bearer {_key()}"},
+                          files={"file": (filename, audio, "application/octet-stream")},
+                          data=data)
     except httpx.HTTPError as e:   # tarmoq: DNS, ulanmadi, vaqt tugadi
         log.error("OpenAI ga ulanib bo'lmadi (%s): %s", type(e).__name__, e)
         raise validation("VOICE_FAILED",
                          "Ovoz xizmatiga ulanib bo'lmadi — serverda internet yo'q yoki sekin.")
+
+
+def transcribe(audio: bytes, filename: str = "voice.ogg", lang: str = "uz",
+               vocab: Optional[list[str]] = None) -> str:
+    prompt = f"Qurilish kompaniyasi vazifalari. Nutq {LANG_NAME.get(lang, lang)} tilida."
+    if vocab:
+        joined = ", ".join(vocab)
+        prompt += " Nomlar: " + joined[:VOCAB_LIMIT]
+    data = {"model": settings.OPENAI_STT_MODEL, "prompt": prompt}
+    if lang in STT_LANG_PARAM:
+        data["language"] = lang
+
+    r = _stt_request(audio, filename, data)
+    # Zaxira: model biror til kodini qabul qilmasa, o'sha parametrsiz bir marta qaytaramiz.
+    # Modellar va ular qo'llaydigan tillar ro'yxati o'zgarib turadi — shunda ham ishlasin.
+    if r.status_code == 400 and "language" in data and '"param": "language"' in r.text:
+        log.warning("model '%s' tilini qabul qilmadi — parametrsiz qayta urinamiz", lang)
+        data.pop("language")
+        r = _stt_request(audio, filename, data)
     if r.status_code >= 400:
         _fail("transcribe", r, "Ovozni matnga o'girib bo'lmadi. Qayta urinib ko'ring.")
     text = (r.json().get("text") or "").strip()
