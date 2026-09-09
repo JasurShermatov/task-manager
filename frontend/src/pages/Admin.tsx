@@ -2,16 +2,21 @@ import React, { useState } from 'react'
 import { del, invalidate, patch, post } from '../lib/api'
 import { PageHeader } from '../components/Layout'
 import Modal, { Confirm } from '../components/Modal'
+import { useAuth } from '../lib/auth'
 import { useDebounce, useFetch } from '../lib/hooks'
-import { useT } from '../lib/i18n'
+import { Key, useT } from '../lib/i18n'
 import { useToast } from '../lib/toast'
 
-type Tab = 'deps' | 'staff'
+type Tab = 'deps' | 'staff' | 'asst'
 
-/** Administratsiya — foydalanuvchi so'raganidek ikkita alohida oyna:
- *  «Bo'limlar» (bo'lim + boshlig'i) va «Asosiy bo'lim xodimlari». */
+/** Administratsiya — uchta alohida oyna: «Bo'limlar» (bo'lim + boshlig'i),
+ *  «Asosiy bo'lim xodimlari» va «Assistantlar».
+ *  Assistantlar oynasi faqat boshliqqa ko'rinadi — assistant o'ziga teng hisob ocha olmaydi.
+ *  Server ham shuni tekshiradi, bu yerda faqat tugmani yashiramiz. */
 export default function Admin() {
   const { t } = useT()
+  const { me } = useAuth()
+  const isBoss = me?.role === 'boss'
   const [tab, setTab] = useState<Tab>('deps')
   return (
     <>
@@ -20,9 +25,14 @@ export default function Admin() {
         <div className="seg seg--light">
           <button className={tab === 'deps' ? 'on' : ''} onClick={() => setTab('deps')}>{t('ad_deps')}</button>
           <button className={tab === 'staff' ? 'on' : ''} onClick={() => setTab('staff')}>{t('ad_staff')}</button>
+          {isBoss && (
+            <button className={tab === 'asst' ? 'on' : ''} onClick={() => setTab('asst')}>{t('ad_assistants')}</button>
+          )}
         </div>
       </div>
-      <div className="content">{tab === 'deps' ? <Departments /> : <Staff />}</div>
+      <div className="content">
+        {tab === 'deps' ? <Departments /> : tab === 'staff' ? <Staff /> : isBoss ? <Assistants /> : null}
+      </div>
     </>
   )
 }
@@ -173,7 +183,65 @@ function Staff() {
   )
 }
 
+// ---------------------------------------------------------------- assistantlar (faqat boshliq)
+function Assistants() {
+  const { t } = useT()
+  const [active, setActive] = useState('true')
+  const { data: rows, reload } = useFetch<any[]>('/users',
+    { role: 'assistant', active: active === 'all' ? undefined : active === 'true' }, [active])
+  const [person, setPerson] = useState<any>(null)
+
+  return (
+    <>
+      <p className="muted small" style={{ margin: '0 0 12px' }}>{t('ad_asst_hint')}</p>
+      <div className="row wrap" style={{ marginBottom: 12 }}>
+        <button className="btn btn--p" onClick={() => setPerson({ role: 'assistant' })}>{t('ad_new_asst')}</button>
+        <select className="sel sel--sm" value={active} onChange={e => setActive(e.target.value)}>
+          <option value="true">{t('ad_active')}</option>
+          <option value="false">{t('ad_blocked')}</option>
+          <option value="all">{t('all')}</option>
+        </select>
+        <span className="chip">{rows?.length ?? 0}</span>
+      </div>
+
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead><tr>
+            <th>{t('ad_name')}</th><th>{t('ad_position')}</th><th>{t('ad_login')}</th>
+            <th>{t('ad_status')}</th><th />
+          </tr></thead>
+          <tbody>
+            {rows?.map(u => (
+              <tr key={u.id} className={u.is_active ? '' : 'is-off'}>
+                <td className="b">{u.full_name}</td>
+                <td className="small">{u.position || '—'}</td>
+                <td className="mono small">{u.login}</td>
+                <td>
+                  <span className={'pill ' + (u.is_active ? 'pill--ok' : 'pill--g')}>
+                    {u.is_active ? t('ad_active') : t('ad_blocked')}
+                  </span>
+                  {u.telegram_user_id && <span className="pill pill--t" style={{ marginLeft: 4 }}>TG</span>}
+                </td>
+                <td className="nowrap right-cell">
+                  <button className="btn btn--sm" onClick={() => setPerson(u)}>{t('edit')}</button>
+                </td>
+              </tr>
+            ))}
+            {!rows?.length && <tr><td colSpan={5}><div className="empty">{t('empty')}</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {person && <PersonForm user={person} departments={[]} lockRole="assistant"
+                             onClose={() => { setPerson(null); reload(); invalidate() }} />}
+    </>
+  )
+}
+
 // ---------------------------------------------------------------- xodim kartochkasi
+const newTitleKey = (role: string): Key =>
+  role === 'bolim_boshligi' ? 'ad_new_head' : role === 'assistant' ? 'ad_new_asst' : 'ad_new_staff'
+
 function PersonForm({ user, departments, lockRole, onClose }:
   { user: any; departments: any[]; lockRole: string; onClose: () => void }) {
   const { t } = useT()
@@ -222,7 +290,7 @@ function PersonForm({ user, departments, lockRole, onClose }:
   const ready = f.full_name.trim() && f.login.trim() && (!isNew || f.password) && (!needsDep || f.department_id)
 
   return (
-    <Modal title={isNew ? (needsDep ? t('ad_new_head') : t('ad_new_staff')) : f.full_name} onClose={onClose}>
+    <Modal title={isNew ? t(newTitleKey(f.role)) : f.full_name} onClose={onClose}>
       <div className="modal__b">
         <label className="lbl full">{t('ad_name')} *
           <input className="inp" autoFocus value={f.full_name} onChange={set('full_name')} />

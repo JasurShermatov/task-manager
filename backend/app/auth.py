@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .errors import permission_denied, scope_forbidden, unauthorized
-from .models import MANAGERS, RefreshToken, Task, User
+from .errors import boss_only, permission_denied, scope_forbidden, unauthorized
+from .models import BOSS, MANAGERS, RefreshToken, Task, User
 
 
 # ---------- parollar ----------
@@ -79,10 +79,19 @@ class Ctx:
     def is_manager(self) -> bool:
         return self.user.role in MANAGERS
 
+    @property
+    def is_boss(self) -> bool:
+        return self.user.role == BOSS
+
     def require_manager(self):
         """Boss va assistant huquqda teng — ikkalasi ham o'tadi."""
         if not self.is_manager:
             raise permission_denied()
+
+    def require_boss(self):
+        """Faqat boshliq: assistant hisoblarini ochish/o'chirish/yangilash."""
+        if not self.is_boss:
+            raise boss_only()
 
 
 def get_ctx(request: Request,

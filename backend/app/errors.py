@@ -20,6 +20,13 @@ def permission_denied():
     return ApiError(403, "PERMISSION_DENIED", "Bu amal uchun ruxsatingiz yo'q.")
 
 
+def boss_only():
+    """Assistant hisoblarini faqat boshliq boshqaradi — aks holda assistant o'ziga
+    teng hisob ochib, boshliqni chetlab o'tishi mumkin edi."""
+    return ApiError(403, "BOSS_ONLY",
+                    "Boshliq va assistant hisoblarini faqat boshliq boshqaradi.")
+
+
 def task_not_found():
     return ApiError(404, "TASK_NOT_FOUND", "Vazifa topilmadi yoki arxivlangan.")
 
