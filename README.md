@@ -118,6 +118,10 @@ Yangi ──▶ Boshladim ──▶ Topshirdim ──▶ Qabul qilindi
 ```
 
 - **Topshirishda dalil majburiy** — kamida bitta rasm yoki fayl.
+  *Istisno:* boshliq bilan assistant **bir-biriga** bergan vazifada dalil shart emas —
+  ular ko'pincha bir-biriga savol beradi («shartnoma qanday bo'ldi?»), bunday ishning
+  rasmi bo'lmaydi. Xohlasa baribir fayl qo'sha oladi. Qoida bitta joyda:
+  `services/tasks.proof_required`; API `needs_proof` bilan aytadi, web va bot shunga qaraydi.
 - **Qaytarilgandan keyin eski dalil hisobga olinmaydi** — yangisi talab qilinadi.
 - Qaytarish sababi izoh bo'lib qoladi, ijrochi nimani tuzatishni ko'radi.
 - Muddat surilsa `original_due_at` saqlanadi va necha marta surilgani hisoblanadi.

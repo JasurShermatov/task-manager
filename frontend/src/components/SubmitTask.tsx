@@ -4,8 +4,12 @@ import { useT } from '../lib/i18n'
 import { useToast } from '../lib/toast'
 import Modal from './Modal'
 
-/** Topshirish: nima qilindi + dalil. Dalilsiz yuborib bo'lmaydi — server ham rad etadi,
- *  shuning uchun tugma ham o'chiq turadi va sabab yozib qo'yiladi. */
+/** Topshirish: nima qilindi + dalil.
+ *
+ *  Dalil odatda majburiy — server ham rad etadi, shuning uchun tugma o'chiq turadi va
+ *  sabab yozib qo'yiladi. Boshliq bilan assistant bir-biriga bergan vazifada esa dalil
+ *  shart emas (ular ko'pincha bir-biriga savol beradi) — buni server `needs_proof` bilan
+ *  aytadi, biz o'zimiz rolga qarab hisoblamaymiz. */
 export default function SubmitTask({ task, onClose, onDone }:
   { task: any; onClose: () => void; onDone?: () => void }) {
   const { t } = useT()
@@ -13,6 +17,7 @@ export default function SubmitTask({ task, onClose, onDone }:
   const [note, setNote] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
+  const needProof = task.needs_proof !== false
 
   const add = (list: FileList | null) => {
     if (!list) return
@@ -43,7 +48,7 @@ export default function SubmitTask({ task, onClose, onDone }:
         <label className="lbl">{t('sb_note')}
           <textarea className="inp" autoFocus value={note} onChange={e => setNote(e.target.value)} />
         </label>
-        <label className="lbl">{t('sb_proof')} *
+        <label className="lbl">{t('sb_proof')}{needProof ? ' *' : ''}
           <div className="drop">
             <input type="file" multiple accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
                    onChange={e => add(e.target.files)} />
@@ -64,11 +69,13 @@ export default function SubmitTask({ task, onClose, onDone }:
             ))}
           </div>
         )}
-        {!files.length && <div className="field-err">{t('sb_proof_req')}</div>}
+        {!files.length && (needProof
+          ? <div className="field-err">{t('sb_proof_req')}</div>
+          : <div className="hint">{t('sb_proof_opt')}</div>)}
       </div>
       <div className="modal__f">
         <button className="btn" onClick={onClose}>{t('cancel')}</button>
-        <button className="btn btn--p" onClick={send} disabled={busy || !files.length}>{t('a_submit')}</button>
+        <button className="btn btn--p" onClick={send} disabled={busy || (needProof && !files.length)}>{t('a_submit')}</button>
       </div>
     </Modal>
   )

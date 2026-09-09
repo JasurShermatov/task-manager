@@ -51,6 +51,7 @@ const uz = {
   // topshirish
   sb_title: 'Vazifani topshirish', sb_note: 'Nima qilindi?',
   sb_proof: 'Dalil — rasm yoki fayl', sb_proof_req: 'Kamida bitta fayl kerak',
+  sb_proof_opt: 'Bu vazifada dalil shart emas — xohlasangiz qo\'shasiz',
   sb_drop: 'Fayl tanlang yoki bu yerga tashlang', sb_ok: 'Topshirildi',
   // hisobot
   rep_period: 'Davr', rep_week: 'Hafta', rep_month: 'Oy', rep_year: 'Yil', rep_custom: 'Oraliq',
@@ -119,6 +120,7 @@ const ru: typeof uz = {
   dlg_reason_req: 'Причина обязательна',
   sb_title: 'Сдача задачи', sb_note: 'Что сделано?',
   sb_proof: 'Подтверждение — фото или файл', sb_proof_req: 'Нужен хотя бы один файл',
+  sb_proof_opt: 'В этой задаче подтверждение не обязательно',
   sb_drop: 'Выберите файл или перетащите сюда', sb_ok: 'Сдано',
   rep_period: 'Период', rep_week: 'Неделя', rep_month: 'Месяц', rep_year: 'Год', rep_custom: 'Диапазон',
   rep_role: 'По кому', rep_all: 'Все', rep_heads: 'Начальники отделов', rep_workers: 'Основной отдел',
@@ -184,6 +186,7 @@ const en: typeof uz = {
   dlg_reason_req: 'Reason is required',
   sb_title: 'Submit task', sb_note: 'What was done?',
   sb_proof: 'Proof — photo or file', sb_proof_req: 'At least one file is required',
+  sb_proof_opt: 'Proof is optional for this task',
   sb_drop: 'Choose a file or drop it here', sb_ok: 'Submitted',
   rep_period: 'Period', rep_week: 'Week', rep_month: 'Month', rep_year: 'Year', rep_custom: 'Range',
   rep_role: 'Group', rep_all: 'Everyone', rep_heads: 'Department heads', rep_workers: 'Main department',

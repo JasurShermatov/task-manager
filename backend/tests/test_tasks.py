@@ -189,7 +189,6 @@ def test_manager_submits_own_task_and_the_other_one_accepts(boss, users, world):
                                  "due_at": "2026-12-05"}).json()["id"]
 
     assert boss.post(f"/tasks/{tid}/start").status_code == 200
-    assert boss.post(f"/tasks/{tid}/submit", {"note": "Bo'ldi"}).status_code == 422, "dalilsiz o'tmasin"
     boss.prove(tid)
     r = boss.post(f"/tasks/{tid}/submit", {"note": "Imzolandi, nusxasi ilova"})
     assert r.status_code == 200, r.text
@@ -207,3 +206,48 @@ def test_self_assigned_task_can_be_closed_by_its_owner(boss):
     boss.prove(tid)
     assert boss.post(f"/tasks/{tid}/submit", {"note": "Tayyor"}).status_code == 200
     assert boss.post(f"/tasks/{tid}/accept").status_code == 200
+
+
+
+# ------------------------------------------------- dalil kimga shart
+def test_managers_do_not_need_proof_for_each_other(boss, users, world):
+    """Boshliq bilan assistant ko'pincha bir-biriga savol beradi ("shartnoma qanday bo'ldi?").
+    Bunday ishning rasmi bo'lmaydi — javobning o'zi yetadi."""
+    a = users["assistant"]
+    tid = a.post("/tasks", json={"title": "Shartnoma qanday bo'ldi?", "assignee_id": boss.id,
+                                 "due_at": "2026-12-11"}).json()["id"]
+    assert boss.get(f"/tasks/{tid}").json()["needs_proof"] is False, "UI ham shuni bilishi kerak"
+    r = boss.post(f"/tasks/{tid}/submit", {"note": "Imzolandi, ertaga nusxasini beraman"})
+    assert r.status_code == 200, r.text
+
+    # teskari yo'nalish ham xuddi shunday
+    tid2 = boss.post("/tasks", json={"title": "Kelishuv holati?", "assignee_id": a.id,
+                                     "due_at": "2026-12-11"}).json()["id"]
+    assert a.post(f"/tasks/{tid2}/submit", {"note": "Kelishildi"}).status_code == 200
+
+
+def test_everyone_else_still_needs_proof(boss, users, world):
+    """Istisno faqat boshliq-assistant juftligiga tegishli; qolgan hamma dalil beradi."""
+    w = world["users"]["worker1"]["id"]
+    tid = boss.post("/tasks", json={"title": "Ombor hisobi", "assignee_id": w,
+                                    "due_at": "2026-12-12"}).json()["id"]
+    assert boss.get(f"/tasks/{tid}").json()["needs_proof"] is True
+    bad = users["worker1"].post(f"/tasks/{tid}/submit", {"note": "Bo'ldi"})
+    assert bad.status_code == 422 and bad.json()["code"] == "PROOF_REQUIRED", bad.text
+    users["worker1"].prove(tid)
+    assert users["worker1"].post(f"/tasks/{tid}/submit", {"note": "Bo'ldi"}).status_code == 200
+
+    # bo'lim boshlig'i ham dalil beradi
+    h = world["users"]["head1"]["id"]
+    tid2 = boss.post("/tasks", json={"title": "Ta'minot rejasi", "assignee_id": h,
+                                     "due_at": "2026-12-12"}).json()["id"]
+    assert users["head1"].post(f"/tasks/{tid2}/submit", {"note": "Tayyor"}).status_code == 422
+
+
+def test_manager_task_to_a_manager_still_accepts_files(boss, users):
+    """Dalil shart emas - lekin xohlasa qo'sha oladi."""
+    a = users["assistant"]
+    tid = a.post("/tasks", json={"title": "Hisobotni ko'ring", "assignee_id": boss.id,
+                                 "due_at": "2026-12-13"}).json()["id"]
+    assert boss.prove(tid).status_code == 201
+    assert boss.post(f"/tasks/{tid}/submit", {"note": "Ilova qildim"}).status_code == 200
