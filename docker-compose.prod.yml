@@ -2,10 +2,19 @@
 #
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
-# Tashqariga faqat 80-port chiqadi. Postgres, Redis va API server ichida qoladi -
-# ularga internetdan kirib bo'lmaydi.
+# Tashqariga faqat web chiqadi (WEB_PORT va WEB_TLS_PORT). Postgres, Redis va API
+# server ichida qoladi - ularga internetdan kirib bo'lmaydi.
+# Docker loglari sukut bo'yicha cheksiz o'sadi va vaqt o'tib diskni to'ldiradi.
+# Har servis uchun 3 x 10 MB - so'nggi loglar qoladi, eskisi o'chib boradi.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
+    logging: *logging
     image: postgres:16-alpine
     restart: always
     environment:
@@ -25,6 +34,7 @@ services:
     # DIQQAT: ports yo'q - baza tashqariga ochilmaydi
 
   redis:
+    logging: *logging
     image: redis:7-alpine
     restart: always
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
@@ -37,6 +47,7 @@ services:
       retries: 12
 
   api:
+    logging: *logging
     build: ./backend
     restart: always
     env_file: .env
@@ -60,6 +71,7 @@ services:
     # DIQQAT: ports yo'q - API ga faqat nginx orqali kiriladi
 
   bot:
+    logging: *logging
     build: ./bot
     restart: always
     env_file: .env
@@ -71,6 +83,7 @@ services:
       api: { condition: service_healthy }
 
   web:
+    logging: *logging
     build:
       context: ./frontend
       args:
