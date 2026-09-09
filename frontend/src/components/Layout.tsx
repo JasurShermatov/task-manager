@@ -37,14 +37,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="side__sub">{t('app_sub')}</div>
           </div>
           <nav className="side__nav">
-            {isManager ? <>
+            {isManager && <>
               <Item to="/home" title={t('nav_home')} sub={t('sub_home')} />
               <Item to="/tasks" title={t('nav_tasks')} sub={t('sub_tasks')} />
+            </>}
+            {/* «Vazifalarim» hammada: boshliq bilan assistant bir-biriga vazifa bera oladi,
+                demak ularning ham o'zlariga berilgan ishi bo'ladi. */}
+            <Item to="/my" title={t('nav_my')} sub={t('sub_my')} />
+            {isManager && <>
               <Item to="/reports" title={t('nav_reports')} sub={t('sub_reports')} />
               <Item to="/admin" title={t('nav_admin')} sub={t('sub_admin')} />
-            </> : (
-              <Item to="/my" title={t('nav_my')} sub={t('sub_my')} />
-            )}
+            </>}
             <Item to="/settings" title={t('nav_settings')} sub={t('sub_settings')} />
           </nav>
           <div className="side__foot">

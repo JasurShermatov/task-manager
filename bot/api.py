@@ -52,6 +52,10 @@ class Api:
     async def register_username(self, username: str) -> dict:
         return await self._req("POST", "/telegram/register-username", json={"username": username})
 
+    async def bot_lease(self, instance_id: str) -> dict:
+        """Bitta tokenga bitta ishlaydigan bot — ijozatni API beradi."""
+        return await self._req("POST", "/telegram/bot-lease", json={"instance_id": instance_id})
+
     async def outbox(self, limit: int = 50) -> list:
         return await self._req("GET", "/telegram/outbox", params={"limit": limit})
 

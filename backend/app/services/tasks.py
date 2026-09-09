@@ -117,8 +117,9 @@ def task_perms(ctx: Ctx, task: Task) -> dict:
     return {
         "start": mine and task.status == NEW,
         "submit": mine and open_,
-        "accept": mgr and task.status == SUBMITTED,
-        "return": mgr and task.status == SUBMITTED,
+        # o'z ishini o'zi qabul qilmaydi (o'ziga o'zi qo'ygani bundan mustasno)
+        "accept": mgr and task.status == SUBMITTED and (not mine or task.created_by == ctx.user.id),
+        "return": mgr and task.status == SUBMITTED and (not mine or task.created_by == ctx.user.id),
         "edit": mgr and task.status not in (DONE, CANCELLED),
         "cancel": mgr and task.status not in (DONE, CANCELLED),
         "comment": True,

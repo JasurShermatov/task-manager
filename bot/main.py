@@ -4,13 +4,19 @@ Ikki xil foydalanuvchi:
   * boshliq / assistant — vazifa beradi (ovoz yoki matn), topshirilganini qabul qiladi,
     kechikkanlarni va hisobotni ko'radi;
   * bo'lim boshlig'i / ijrochi — o'z vazifalarini ko'radi va **dalil bilan** topshiradi.
+
+«Vazifalarim» va «Topshirish» hammada bor — boshliq bilan assistant bir-biriga vazifa
+bera oladi, demak ularning ham topshiradigan ishi bo'ladi.
 """
 from __future__ import annotations
 
 import asyncio
 import html
 import logging
+import os
 import re
+import socket
+import uuid
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any, Optional
@@ -40,8 +46,23 @@ MANAGERS = ("boss", "assistant")
 
 # ============ foydalanuvchi ============
 class UserMiddleware(BaseMiddleware):
-    """data['u'] (API foydalanuvchisi yoki None) va data['lang'] qo'shadi."""
+    """data['u'] (API foydalanuvchisi yoki None) va data['lang'] qo'shadi.
+
+    Ikki xil "u yo'q" holatini ajratish shu yerda hal bo'ladi:
+
+      * API "topilmadi" (404) dedi -> hisob rostdan bog'lanmagan, kod so'raymiz;
+      * API javob bermadi (o'chgan, qayta ko'tarilyapti, tarmoq) -> hisob joyida,
+        shunchaki hozir tekshirib bo'lmadi. Bunda odamdan kod so'ramaymiz, aks holda
+        u har safar qaytadan bog'lashga majbur bo'ladi va "bot uzilib qoldi" deb o'ylaydi.
+
+    Shu sabab muvaffaqiyatli javob uzoq saqlanadi (TTL) va xato bo'lsa oxirgi ma'lum
+    holat ishlatiladi.
+    """
     cache: dict[int, tuple[float, Any]] = {}
+    down: set[int] = set()      # shu odam uchun oxirgi so'rov xato bilan tugadi
+    TTL = 300                   # muvaffaqiyatli javob shuncha soniya saqlanadi
+    MISS_TTL = 20               # "bog'lanmagan" javobi qisqa saqlanadi - endi bog'lasa darrov ko'rinsin
+    RETRY = 10                  # xatodan keyin shuncha soniyadan keyin qayta uriniladi
 
     async def __call__(self, handler, event: TelegramObject, data: dict):
         tg_user = data.get("event_from_user")
@@ -53,11 +74,15 @@ class UserMiddleware(BaseMiddleware):
                 u = hit[1]
             else:
                 try:
-                    u = await api.user_by_tg(tg_user.id)
-                except ApiError as e:
-                    log.warning("foydalanuvchi topilmadi: %s", e)
+                    u = await api.user_by_tg(tg_user.id)      # 404 -> None, bu xato emas
+                    self.cache[tg_user.id] = (now + (self.TTL if u else self.MISS_TTL), u)
+                    self.down.discard(tg_user.id)
+                except Exception as e:  # noqa: BLE001 - API vaqtincha yo'q
+                    log.warning("API javob bermadi (%s) - oxirgi ma'lum holat ishlatildi",
+                                type(e).__name__)
                     u = hit[1] if hit else None
-                self.cache[tg_user.id] = (now + 30, u)
+                    self.down.add(tg_user.id)
+                    self.cache[tg_user.id] = (now + self.RETRY, u)
         data["u"] = u
         lang = (u or {}).get("lang") or ((tg_user.language_code or "uz")[:2] if tg_user else "uz")
         data["lang"] = lang if lang in T else "uz"
@@ -66,6 +91,20 @@ class UserMiddleware(BaseMiddleware):
     @classmethod
     def invalidate(cls, tg_id: int):
         cls.cache.pop(tg_id, None)
+        cls.down.discard(tg_id)
+
+    @classmethod
+    def api_is_down(cls, tg_id: int | None) -> bool:
+        return bool(tg_id) and tg_id in cls.down
+
+
+async def need_link(target, lang: str):
+    """`u` yo'q. Sababiga qarab javob beramiz - kod so'rash yoki "biroz kuting"."""
+    tg = target.from_user.id if getattr(target, "from_user", None) else None
+    key = "api_wait" if UserMiddleware.api_is_down(tg) else "not_linked"
+    if isinstance(target, CallbackQuery):
+        return await target.answer(t(lang, key), show_alert=True)
+    return await target.answer(t(lang, key))
 
 
 def role_of(u: dict | None) -> str:
@@ -194,6 +233,10 @@ async def start(msg: Message, state: FSMContext, u: dict | None, lang: str,
         await state.set_state(Link.code)
         msg.text = arg
         return await link_code(msg, state, lang)
+    if UserMiddleware.api_is_down(msg.from_user.id if msg.from_user else None):
+        # API bir zumga javob bermadi. Hisob bog'liq bo'lishi mumkin - kod so'rab,
+        # odamni bekorga qaytadan bog'lashga majburlamaymiz.
+        return await msg.answer(t(lang, "api_wait"))
     await msg.answer(t(lang, "welcome_unlinked"), reply_markup=ReplyKeyboardRemove())
     await state.set_state(Link.code)
     await msg.answer(t(lang, "ask_code"))
@@ -206,8 +249,11 @@ async def link_code(msg: Message, state: FSMContext, lang: str):
         return await msg.answer(t(lang, "ask_code"))
     try:
         u = await api.consume_code(code, msg.from_user.id)
-    except ApiError:
-        return await msg.answer(t(lang, "code_invalid"))
+    except ApiError as e:
+        # Kod rostdan xato bo'lsa - 4xx. Server xatosi bo'lsa buni kodga to'nkamaymiz.
+        return await msg.answer(t(lang, "code_invalid" if e.status < 500 else "api_wait"))
+    except Exception:  # noqa: BLE001 - tarmoq/API yo'q
+        return await msg.answer(t(lang, "api_wait"))
     await state.clear()
     UserMiddleware.invalidate(msg.from_user.id)
     lang = u.get("lang") or lang
@@ -218,7 +264,7 @@ async def link_code(msg: Message, state: FSMContext, lang: str):
 async def cmd_menu(msg: Message, state: FSMContext, u: dict | None, lang: str):
     await state.clear()
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
+        return await need_link(msg, lang)
     await menu(msg, u, lang)
 
 
@@ -231,7 +277,7 @@ async def cmd_help(msg: Message, lang: str):
 async def cancel_any(msg: Message, state: FSMContext, u: dict | None, lang: str):
     await state.clear()
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
+        return await need_link(msg, lang)
     await menu(msg, u, lang, t(lang, "cancelled"))
 
 
@@ -264,9 +310,10 @@ async def show_list(msg: Message, u: dict, lang: str, rows: list[dict], empty_ke
 @router.message(F.text.in_({T[x]["btn_my"] for x in T}))
 async def my_tasks(msg: Message, u: dict | None, lang: str):
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
-    rows = (await api.tasks(u["id"], status="new,progress", per_page=20))["items"]
-    await show_list(msg, u, lang, rows)
+        return await need_link(msg, lang)
+    # mine=True: boshqaruvchi bo'lsa ham FAQAT o'ziga berilganlari
+    rows = (await api.tasks(u["id"], status="new,progress", mine=True, per_page=20))["items"]
+    await show_list(msg, u, lang, rows, empty_key="my_none")
 
 
 @router.message(F.text.in_({T[x]["btn_submitted"] for x in T}))
@@ -341,7 +388,7 @@ async def report_period(cb: CallbackQuery, u: dict, lang: str):
 @router.callback_query(F.data.startswith("t:"))
 async def task_action(cb: CallbackQuery, state: FSMContext, u: dict | None, lang: str):
     if not u:
-        return await cb.answer(t(lang, "not_linked"), show_alert=True)
+        return await need_link(cb, lang)
     _, action, tid = cb.data.split(":")
     tid = int(tid)
     try:
@@ -399,8 +446,8 @@ async def comment_text(msg: Message, state: FSMContext, u: dict, lang: str):
 @router.message(F.text.in_({T[x]["btn_submit"] for x in T}))
 async def submit_pick(msg: Message, state: FSMContext, u: dict | None, lang: str):
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
-    rows = (await api.tasks(u["id"], status="new,progress", per_page=20))["items"]
+        return await need_link(msg, lang)
+    rows = (await api.tasks(u["id"], status="new,progress", mine=True, per_page=20))["items"]
     if not rows:
         return await msg.answer(t(lang, "sb_none"))
     items = [{"id": r["id"], "name": f"{r['code']} {r['title'][:40]}"} for r in rows]
@@ -478,7 +525,7 @@ async def submit_finish(msg: Message, state: FSMContext, u: dict, lang: str):
 @router.message(F.text.in_({T[x]["btn_new"] for x in T}))
 async def new_task(msg: Message, state: FSMContext, u: dict | None, lang: str):
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
+        return await need_link(msg, lang)
     if not is_manager(u):
         return await msg.answer(t(lang, "no_perm"))
     await state.clear()
@@ -821,7 +868,7 @@ async def merge_free_text(msg: Message, state: FSMContext, u: dict, lang: str):
 @router.message(F.voice | F.audio)
 async def voice_task(msg: Message, state: FSMContext, u: dict | None, lang: str, bot: Bot):
     if not u:
-        return await msg.answer(t(lang, "not_linked"))
+        return await need_link(msg, lang)
     if not is_manager(u):
         return await msg.answer(t(lang, "voice_no_perm"))
     cur = await state.get_state()
@@ -859,7 +906,7 @@ async def free_text(msg: Message, state: FSMContext, u: dict | None, lang: str):
         if re.fullmatch(r"\s*\d{6}\s*", msg.text or ""):
             await state.set_state(Link.code)
             return await link_code(msg, state, lang)
-        return await msg.answer(t(lang, "welcome_unlinked"))
+        return await need_link(msg, lang)
     if await state.get_state():
         return
     words = (msg.text or "").split()
@@ -961,6 +1008,50 @@ async def warn_if_conflict(bot: Bot):
         pass
 
 
+# ============ bitta tokenga bitta bot ============
+INSTANCE = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:6]}"
+LEASE_RENEW = 30       # soniya
+LEASE_WAIT = 20        # ijozat berilmasa shuncha kutib qayta so'raymiz
+
+
+async def take_lease() -> bool:
+    """API'dan ishlash ijozatini so'raydi.
+
+    True  - ishlayveramiz (ijozat bizda, yoki API yo'q: infratuzilma sababli botni
+            to'xtatib qo'ymaymiz);
+    False - aynan shu baza bilan boshqa nusxa ishlayapti.
+    """
+    try:
+        r = await api.bot_lease(INSTANCE)
+    except Exception as e:  # noqa: BLE001 - API hali ko'tarilmagan bo'lishi mumkin
+        log.warning("ijozat so'ralmadi (%s) - davom etamiz", type(e).__name__)
+        return True
+    return bool(r.get("granted"))
+
+
+async def lease_keeper():
+    """Ijozatni yangilab turadi. Yo'qotib qo'ysak - boshqa nusxa ko'tarilgan, ogohlantiramiz."""
+    while True:
+        await asyncio.sleep(LEASE_RENEW)
+        if not await take_lease():
+            log.error("IJOZAT BOSHQA NUSXAGA O'TDI.%s", CONFLICT_HELP)
+
+
+async def wait_for_lease():
+    """Boshqa nusxa ishlayotgan bo'lsa kutamiz. To'xtab qolmaymiz: u o'chgan zahoti
+    o'zimiz ishga tushamiz - odam hech narsa qilishi shart emas."""
+    warned = False
+    while not await take_lease():
+        if not warned:
+            log.error("%s", CONFLICT_HELP)
+            log.error("Kutyapman: birinchi nusxa to'xtasa, %s soniyada o'zim ishga tushaman.",
+                      LEASE_WAIT)
+            warned = True
+        await asyncio.sleep(LEASE_WAIT)
+    if warned:
+        log.info("ijozat olindi - bot ishga tushdi")
+
+
 async def main():
     if not settings.BOT_TOKEN or ":" not in settings.BOT_TOKEN:
         log.error("BOT_TOKEN .env da yo'q yoki noto'g'ri ko'rinishda.%s", TOKEN_HELP)
@@ -991,8 +1082,10 @@ async def main():
     except Exception as e:  # noqa: BLE001 - API keyinroq ko'tariladi, bot ishlayveradi
         log.warning("username API ga yozilmadi (%s) — keyin qayta yoziladi", type(e).__name__)
 
+    await wait_for_lease()
     await bot.delete_webhook(drop_pending_updates=False)
     await warn_if_conflict(bot)
+    asyncio.create_task(lease_keeper())
     asyncio.create_task(outbox_worker(bot))
     log.info("bot ishga tushdi")
     await dp.start_polling(bot)

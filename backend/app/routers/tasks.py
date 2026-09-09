@@ -58,10 +58,14 @@ def list_tasks(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db),
                status: Optional[str] = None, assignee_id: Optional[int] = None,
                department_id: Optional[int] = None, overdue: Optional[bool] = None,
                date_from: Optional[str] = None, date_to: Optional[str] = None,
-               q: Optional[str] = None, page: int = 1, per_page: int = Query(50, le=200)):
+               q: Optional[str] = None, mine: bool = False,
+               page: int = 1, per_page: int = Query(50, le=200)):
+    """`mine=true` — faqat menga berilgan vazifalar. Boshliq va assistant bir-biriga
+    vazifa bera oladi, shuning uchun ularga ham «Vazifalarim» kerak: shu bayroqsiz
+    boshqaruvchi hamma vazifani ko'rar edi."""
     ref = clock.now()
     sel = select(Task)
-    if not ctx.is_manager:
+    if mine or not ctx.is_manager:
         sel = sel.where(Task.assignee_id == ctx.user.id)   # ijrochi faqat o'zinikini ko'radi
     if status:
         sel = sel.where(Task.status.in_([s.strip() for s in status.split(",") if s.strip()]))
@@ -217,6 +221,12 @@ def accept(task_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_
     t = _get(db, ctx, task_id)
     if t.status != SUBMITTED:
         raise invalid_transition(t.status, DONE)
+    # O'zining ishini o'zi qabul qilishi tekshiruvni ma'nosiz qiladi: vazifani bergan
+    # ikkinchi boshqaruvchi qabul qiladi. O'ziga o'zi qo'ygan vazifa bundan mustasno.
+    if t.assignee_id == ctx.user.id and t.created_by != ctx.user.id:
+        raise validation("SELF_ACCEPT",
+                         "O'zingizga berilgan vazifani o'zingiz qabul qila olmaysiz — "
+                         "uni bergan odam qabul qiladi.")
     t.status, t.done_at, t.accepted_by = DONE, clock.now(), ctx.user.id
     svc.log(db, t, "accept", ctx)
     svc.notify(db, t.assignee_id, "task_accepted", t, svc.task_payload(db, t, actor_name=ctx.user.full_name))

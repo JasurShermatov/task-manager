@@ -16,12 +16,18 @@ except ImportError:  # eski aiogram: <pre> blokini bosib nusxa olinadi
 COPY_LIMIT = 256
 MANAGERS = ("boss", "assistant")
 
-# Menyu: (kalit, faqat boshqaruvchigami)
+# Menyu: (kalit, faqat boshqaruvchigami; None - hammaga)
+#
+# «Vazifalarim» va «Topshirish» hammada bor: boshliq bilan assistant bir-biriga vazifa
+# bera oladi, demak ularning ham o'z vazifalari bo'ladi va ularni botdan topshira olishi
+# kerak. Ilgari bu ikki tugma faqat ijrochida edi va boshliq o'ziga berilgan vazifani
+# botda umuman ko'ra olmasdi.
 MENU = [
-    ("btn_new", True), ("btn_submitted", True), ("btn_late", True),
+    ("btn_new", True),
+    ("btn_my", None), ("btn_submit", None),
+    ("btn_submitted", True), ("btn_late", True),
     ("btn_report", True), ("btn_people", True),
-    ("btn_my", False), ("btn_submit", False),
-    ("btn_lang", None),          # None - hammaga
+    ("btn_lang", None),
 ]
 
 
