@@ -9,15 +9,18 @@ import { useFetch } from '../lib/hooks'
 import { useT } from '../lib/i18n'
 import { useToast } from '../lib/toast'
 
-/** Ijrochi ekrani: faqat o'z vazifalari va bitta ish — dalil bilan topshirish. */
+/** «Vazifalarim»: faqat o'ziga berilgan vazifalar va bitta ish — dalil bilan topshirish.
+ *  Boshliq va assistant ham shu ekranga kiradi, chunki ular bir-biriga vazifa bera oladi;
+ *  shuning uchun so'rovda `mine: true` — aks holda boshqaruvchiga hamma vazifa ko'rinardi. */
 export default function MyTasks() {
   const { t } = useT()
   const nav = useNavigate()
   const { id } = useParams()
   const { toastErr } = useToast()
   const [submitting, setSubmitting] = useState<any>(null)
-  const { data, reload } = useFetch<any>('/tasks', { status: 'new,progress,submitted', per_page: 50 })
-  const { data: done } = useFetch<any>('/tasks', { status: 'done', per_page: 10 })
+  const { data, reload } = useFetch<any>('/tasks',
+    { status: 'new,progress,submitted', mine: true, per_page: 50 })
+  const { data: done } = useFetch<any>('/tasks', { status: 'done', mine: true, per_page: 10 })
 
   const start = async (tk: any) => {
     try { await post(`/tasks/${tk.id}/start`); invalidate(); reload() } catch (e) { toastErr(e) }

@@ -399,3 +399,21 @@ async def test_unlinked_user_is_guided_to_link():
     s2 = Sent()
     await bot.my_tasks(FakeMsg(s2, 999999), None, "uz")
     assert s2.last == t("uz", "not_linked")
+
+
+@pytest.mark.asyncio
+async def test_api_outage_does_not_look_like_being_unlinked():
+    """Eng og'riqli xato shu edi: API bir zumga javob bermasa, bot «hisobingizni
+    bog'lang» deb kod so'rardi va odam har safar qaytadan bog'lardi."""
+    tg = 888888
+    bot.UserMiddleware.down.add(tg)
+    try:
+        s = Sent()
+        await bot.my_tasks(FakeMsg(s, tg), None, "uz")
+        assert s.last == t("uz", "api_wait")
+        s2 = Sent()
+        await bot.start(FakeMsg(s2, tg), ctx_factory()(tg), None, "uz")
+        assert s2.last == t("uz", "api_wait")
+        assert t("uz", "ask_code") not in s2.texts, "kod so'ralmasligi kerak"
+    finally:
+        bot.UserMiddleware.down.discard(tg)

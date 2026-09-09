@@ -161,3 +161,49 @@ def test_done_task_cannot_be_edited(boss, users, world):
     boss.post(f"/tasks/{t['id']}/accept")
     assert boss.patch(f"/tasks/{t['id']}", {"title": "Yangi nom"}).status_code == 422
     assert boss.post(f"/tasks/{t['id']}/cancel", {"reason": "kech"}).status_code == 422
+
+
+# ------------------------------------------------- boshqaruvchining o'z vazifalari
+def test_manager_sees_only_own_tasks_with_mine(boss, users, world):
+    """Boshliq va assistant bir-biriga vazifa beradi — ularga ham «Vazifalarim» kerak.
+    `mine=true` bo'lmasa boshqaruvchiga hamma vazifa ko'rinardi."""
+    a = users["assistant"]
+    r = a.post("/tasks", json={"title": "Boshliqqa: shartnomani imzolang",
+                               "assignee_id": boss.id, "due_at": "2026-12-01"})
+    assert r.status_code == 201, r.text
+    tid = r.json()["id"]
+
+    mine = boss.get("/tasks", params={"mine": "true"}).json()
+    assert all(x["assignee_id"] == boss.id for x in mine["items"]), "begona vazifa tushib qolgan"
+    assert any(x["id"] == tid for x in mine["items"])
+
+    everything = boss.get("/tasks").json()
+    assert everything["total"] > mine["total"], "mine=false bo'lsa boshqaruvchi hammasini ko'radi"
+
+
+def test_manager_submits_own_task_and_the_other_one_accepts(boss, users, world):
+    """To'liq oqim: assistant boshliqqa beradi -> boshliq dalil bilan topshiradi ->
+    assistant qabul qiladi. Boshliq o'zinikini o'zi qabul qila olmaydi."""
+    a = users["assistant"]
+    tid = a.post("/tasks", json={"title": "Boshliq bajaradigan ish", "assignee_id": boss.id,
+                                 "due_at": "2026-12-05"}).json()["id"]
+
+    assert boss.post(f"/tasks/{tid}/start").status_code == 200
+    assert boss.post(f"/tasks/{tid}/submit", {"note": "Bo'ldi"}).status_code == 422, "dalilsiz o'tmasin"
+    boss.prove(tid)
+    r = boss.post(f"/tasks/{tid}/submit", {"note": "Imzolandi, nusxasi ilova"})
+    assert r.status_code == 200, r.text
+    assert r.json()["permissions"]["accept"] is False, "o'z ishini o'zi qabul qilmaydi"
+
+    bad = boss.post(f"/tasks/{tid}/accept")
+    assert bad.status_code == 422 and bad.json()["code"] == "SELF_ACCEPT", bad.text
+    assert a.post(f"/tasks/{tid}/accept").status_code == 200
+
+
+def test_self_assigned_task_can_be_closed_by_its_owner(boss):
+    """O'ziga o'zi qo'ygan vazifani yopadigan boshqa odam yo'q — bu holat to'siqqa tushmasin."""
+    tid = boss.post("/tasks", json={"title": "O'zimga eslatma", "assignee_id": boss.id,
+                                    "due_at": "2026-12-09"}).json()["id"]
+    boss.prove(tid)
+    assert boss.post(f"/tasks/{tid}/submit", {"note": "Tayyor"}).status_code == 200
+    assert boss.post(f"/tasks/{tid}/accept").status_code == 200

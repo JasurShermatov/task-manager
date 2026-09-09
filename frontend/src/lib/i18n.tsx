@@ -23,6 +23,7 @@ const uz = {
   // bosh sahifa
   k_late: 'Kechikkan', k_submitted: 'Tekshiruvda', k_today: 'Bugun tugaydi', k_open: 'Ochiq',
   k_month: 'Shu oy bajarildi', k_percent: 'Bajarish foizi', k_people: 'Xodimlar', k_deps: 'Bo\'limlar',
+  k_mine: 'Menga berilgan',
   home_late: 'Kechikkan vazifalar', home_sub: 'Tekshiruvni kutmoqda', home_none: 'Hammasi joyida.',
   // vazifalar
   new_task: '+ Yangi vazifa', f_status: 'Holat', f_assignee: 'Kimga', f_dep: 'Bo\'lim',
@@ -94,6 +95,7 @@ const ru: typeof uz = {
   st_done: 'Выполнено', st_cancelled: 'Отменено',
   k_late: 'Просрочено', k_submitted: 'На проверке', k_today: 'Срок сегодня', k_open: 'Открытых',
   k_month: 'Выполнено за месяц', k_percent: 'Процент выполнения', k_people: 'Сотрудников', k_deps: 'Отделов',
+  k_mine: 'Мои задачи',
   home_late: 'Просроченные задачи', home_sub: 'Ждут проверки', home_none: 'Всё в порядке.',
   new_task: '+ Новая задача', f_status: 'Статус', f_assignee: 'Кому', f_dep: 'Отдел',
   f_overdue: 'Только просроченные', f_from: 'С даты', f_to: 'По дату', f_clear: 'Сбросить',
@@ -157,6 +159,7 @@ const en: typeof uz = {
   st_done: 'Done', st_cancelled: 'Cancelled',
   k_late: 'Overdue', k_submitted: 'In review', k_today: 'Due today', k_open: 'Open',
   k_month: 'Done this month', k_percent: 'Completion rate', k_people: 'People', k_deps: 'Departments',
+  k_mine: 'Assigned to me',
   home_late: 'Overdue tasks', home_sub: 'Waiting for review', home_none: 'All clear.',
   new_task: '+ New task', f_status: 'Status', f_assignee: 'Assignee', f_dep: 'Department',
   f_overdue: 'Overdue only', f_from: 'From', f_to: 'To', f_clear: 'Clear',

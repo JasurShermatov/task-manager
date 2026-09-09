@@ -92,6 +92,37 @@ def register_bot_username(body: dict, db: Session = Depends(get_db)):
     return {"bot_username": val}
 
 
+# Bitta tokenga bitta ishlaydigan bot. Ikkinchi nusxa (masalan, mahalliy kompyuterda)
+# ishga tushsa, Telegram yangilanishlarni ikkiga bo'lib yuboradi: odam kod kiritadi, uni
+# ikkinchi nusxa ushlab, boshqa bazadan qidiradi va "kod noto'g'ri" deydi — foydalanuvchi
+# uchun bu "bot uzilib qoldi" bo'lib ko'rinadi. Shuning uchun ijozat (lease) shu yerda
+# beriladi: birinchi kelgan ishlaydi, ikkinchisi kutadi va birinchisi to'xtagach o'zi oladi.
+BOT_LEASE_TTL = 90    # soniya; bot har 30 soniyada yangilab turadi
+
+
+@router.post("/telegram/bot-lease", dependencies=[Depends(get_service)])
+def bot_lease(body: dict, db: Session = Depends(get_db)):
+    me = str(body.get("instance_id") or "").strip()[:80]
+    if not me:
+        raise validation("VALIDATION", "instance_id bo'sh.")
+    now = datetime.utcnow()
+    holder, since = "", None
+    raw = get_setting(db, "bot_lease")
+    if "|" in raw:
+        holder, ts = raw.split("|", 1)
+        try:
+            since = datetime.fromisoformat(ts)
+        except ValueError:
+            since = None
+    age = (now - since).total_seconds() if since else None
+    granted = holder in ("", me) or age is None or age > BOT_LEASE_TTL
+    if granted:
+        _set_setting(db, "bot_lease", f"{me}|{now.isoformat(timespec='seconds')}")
+        db.commit()
+    return {"granted": granted, "holder": holder if not granted else me,
+            "age": round(age) if age is not None else None, "ttl": BOT_LEASE_TTL}
+
+
 @router.get("/telegram/outbox", dependencies=[Depends(get_service)])
 def outbox(limit: int = Query(50, le=200), db: Session = Depends(get_db)):
     rows = db.scalars(select(Notification)

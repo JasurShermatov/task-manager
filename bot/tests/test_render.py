@@ -55,11 +55,18 @@ def test_menu_differs_by_role():
     boss = set(render.menu_keys("uz", "boss"))
     worker = set(render.menu_keys("uz", "ijrochi"))
     assert t("uz", "btn_new") in boss and t("uz", "btn_report") in boss
-    assert t("uz", "btn_my") not in boss, "boshliq ijrochi emas — «Vazifalarim» chiqmasin"
+    assert t("uz", "btn_report") not in worker and t("uz", "btn_new") not in worker
     assert worker == {t("uz", "btn_my"), t("uz", "btn_submit"), t("uz", "btn_lang")}
     assert render.menu_keys("uz", "assistant") == render.menu_keys("uz", "boss"), \
         "assistant boshliq bilan teng"
     assert render.menu_keys("uz", "bolim_boshligi") == render.menu_keys("uz", "ijrochi")
+
+
+def test_managers_can_also_submit_their_own_tasks():
+    """Boshliq bilan assistant bir-biriga vazifa beradi — demak ularda ham
+    «Vazifalarim» va «Topshirish» bo'lishi shart, aks holda o'z ishini yopa olmaydi."""
+    boss = set(render.menu_keys("uz", "boss"))
+    assert t("uz", "btn_my") in boss and t("uz", "btn_submit") in boss
 
 
 def test_menu_rows_are_pairs():

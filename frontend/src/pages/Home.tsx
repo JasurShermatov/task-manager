@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import CreateTask from '../components/CreateTask'
 import { PageHeader } from '../components/Layout'
 import TaskDrawer from '../components/TaskDrawer'
@@ -36,9 +37,12 @@ function TaskRow({ tk, onOpen }: { tk: any; onOpen: (id: number) => void }) {
 
 export default function Home() {
   const { t } = useT()
+  const nav = useNavigate()
   const [open, setOpen] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
   const { data: d } = useFetch<any>('/reports/dashboard')
+  // Boshliqqa ham vazifa berilishi mumkin (assistant beradi) — ko'zdan qochmasin.
+  const { data: mine } = useFetch<any>('/tasks', { mine: true, status: 'new,progress', per_page: 1 })
   const { data: late } = useFetch<any>('/tasks', { overdue: true, per_page: 8 })
   const { data: sub } = useFetch<any>('/tasks', { status: 'submitted', per_page: 8 })
 
@@ -55,6 +59,8 @@ export default function Home() {
         <Kpi n={d?.open_tasks ?? '—'} label={t('k_open')} />
         <Kpi n={d ? `${d.percent_this_month}%` : '—'} label={t('k_percent')}
              tone={d && d.percent_this_month >= 80 ? 'is-good' : ''} />
+        {!!mine?.total && <Kpi n={mine.total} label={t('k_mine')} tone="is-warn"
+                               onClick={() => nav('/my')} />}
       </div>
 
       <div className="content grid2">

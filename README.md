@@ -55,7 +55,8 @@ bajarilmagani va qaytarilgani aralash, hisobot darhol ko'rinsin uchun. Oxirida o
 | `BAZA ESKI (1.0)` | 1.0 dan qolgan baza. `./fresh.sh` yoki `reset_db --yes` |
 | `BOT TOKENI NOTO'G'RI` | `.env` dagi `BOT_TOKEN` eskirgan. @BotFather → `/mybots` → API Token |
 | Web ochiladi, login ishlamaydi | API ko'tarilmagan: `docker compose logs api` |
-| `TelegramConflictError` yoki botda «Kod noto'g'ri» | **Shu token bilan ikkinchi bot ishlayapti** (ko'pincha serverdagi eski nusxa). Bittasini to'xtating yoki sinash uchun @BotFather dan alohida bot oching |
+| `TelegramConflictError` yoki botda «Kod noto'g'ri» | **Shu token bilan ikkinchi bot ishlayapti** (ko'pincha serverdagi eski nusxa). Ikkinchisi endi o'zi kutib turadi (pastda), birinchisi to'xtaganda o'zi ishga tushadi |
+| Botda «Server bilan aloqa uzildi» | API bir zumga javob bermadi. Hisob bog'liqligicha qoladi — qaytadan kod kiritish shart emas |
 
 ---
 
@@ -121,6 +122,9 @@ Yangi ──▶ Boshladim ──▶ Topshirdim ──▶ Qabul qilindi
 - Qaytarish sababi izoh bo'lib qoladi, ijrochi nimani tuzatishni ko'radi.
 - Muddat surilsa `original_due_at` saqlanadi va necha marta surilgani hisoblanadi.
 - «Muammo» degan alohida holat yo'q — ijrochi izoh yozadi, u boshliqqa darhol boradi.
+- **O'z ishini o'zi qabul qilmaydi.** Assistant boshliqqa vazifa bersa, uni assistant qabul
+  qiladi (va aksincha). O'ziga o'zi qo'ygan vazifa bundan mustasno — uni yopadigan boshqa
+  odam yo'q.
 
 ---
 
@@ -153,17 +157,30 @@ Menyu roldan quriladi:
 | Boshliq / assistant | Bo'lim boshlig'i / ijrochi |
 |---|---|
 | ➕ Yangi vazifa (ovoz yoki matn) | 📋 Vazifalarim |
-| 🟡 Topshirilgan | ✅ Topshirish |
-| ⏰ Kechikkan | 🌐 Til |
-| 📊 Hisobot | |
-| 👥 Odamlar | |
+| 📋 Vazifalarim · ✅ Topshirish | ✅ Topshirish |
+| 🟡 Topshirilgan · ⏰ Kechikkan | 🌐 Til |
+| 📊 Hisobot · 👥 Odamlar | |
 | 🌐 Til | |
+
+«Vazifalarim» va «Topshirish» **hammada** bor: boshliq bilan assistant bir-biriga vazifa
+bera oladi, demak ularning ham topshiradigan ishi bo'ladi. Ro'yxatdagi har bir kartochkada
+o'sha zahoti «Boshladim / Topshirish» tugmasi turadi — qaysinisini xohlasa o'shani tanlaydi.
 
 **Topshirish uch qadam:** vazifani tanlash → nima qilindi → rasm/fayl → «Tayyor».
 Dalilsiz yuborib bo'lmaydi.
 
 **Xabarning o'zida tugmalar:** kimdir topshirsa, boshliqqa rasm bilan xabar keladi va o'sha
 xabarda «✅ Qabul qildim / ↩️ Qayta qil» turadi — ro'yxat ochish shart emas.
+
+**Bitta tokenga bitta bot.** Telegram bir tokenga bitta ulanish beradi. Ikkinchi nusxa
+ishga tushsa, yangilanishlar ikkiga bo'linadi va odam «kod noto'g'ri», «hisob bog'lanmagan»
+degan xabarlarni ko'radi — go'yo bot uzilib qolgandek. Shuning uchun ijozat (lease) API'da
+saqlanadi: birinchi ishga tushgani ishlaydi, ikkinchisi jim kutadi va birinchisi to'xtagan
+zahoti **o'zi** ishga tushadi. Hech narsa qo'lda qilinmaydi.
+
+**Bog'lanish uzilmaydi.** API qayta ko'tarilayotganda bot «hisobingizni bog'lang» demaydi —
+oxirgi ma'lum holatni ishlatadi va «biroz kuting» deydi. Bog'lanish faqat odam o'zi
+*Sozlamalar → Telegram → Uzish* qilganda uziladi.
 
 **Ovozli vazifa** (`OPENAI_API_KEY` bo'lsa): gapirasiz → bot kartochka chiqaradi → «Yuborish».
 Xato bo'lsa «Tahrirlash» — vazifa oddiy matn bo'lib chiqadi, nusxa olib tuzatasiz va qaytarasiz.
@@ -180,7 +197,7 @@ Ism topilmasa taxmin qilinmaydi — tugma bo'lib chiqadi.
 | Vazifalar | boshliq, assistant | Ro'yxat, filtr (odam, bo'lim, holat), qidiruv, kartochka |
 | Hisobot | boshliq, assistant | Hafta/oy/yil, foiz, odam kesimi, Excel va CSV |
 | Administratsiya | boshliq, assistant | **Bo'limlar**, **Asosiy bo'lim xodimlari**, **Assistantlar** (oxirgisi faqat boshliqqa) |
-| Vazifalarim | boshliq (bo'lim), ijrochi | Faqat o'z vazifalari, dalil bilan topshirish |
+| Vazifalarim | **hammaga** | Faqat o'ziga berilgan vazifalar, dalil bilan topshirish |
 | Sozlamalar | hammaga | Profil, parol, Telegram, eslatma soatlari |
 
 Ruxsat **har so'rovda serverda** tekshiriladi — manzilni qo'lda yozib kirishga ham yo'l yopiq.
