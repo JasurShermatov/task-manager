@@ -87,24 +87,64 @@ ularda `ports` yo'q) — ular faqat konteynerlar ichida ko'rinadi.
 
 ---
 
+## 1.0 dan 2.0 ga o'tish (eski baza bo'lsa)
+
+2.0 da ma'lumot tuzilmasi butunlay boshqacha: loyiha / joy / ish turi o'rniga **bo'lim va odam**.
+Shuning uchun eski baza ustiga qo'yib bo'lmaydi — server ko'tarilmaydi va nima qilish
+kerakligini o'zi aytadi:
+
+```
+BAZA ESKI (1.0) — 2.0 ga mos emas.
+  yetishmayotgan ustunlar: department_id, position
+  ...
+```
+
+**Bazani yangidan qurish** (hamma ma'lumot o'chadi):
+
+```bash
+# kerak bo'lsa avval zaxira
+docker compose -f docker-compose.prod.yml exec -T db pg_dump -U saff saff_tasks > saff-1.0.sql
+
+docker compose -f docker-compose.prod.yml run --rm api python -m app.reset_db --yes
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`run --rm` ishlatiladi, `exec` emas: API ko'tarilmagan bo'lsa `exec` ishlamaydi.
+
+Mahalliy (`docker-compose.yml`) uchun ham xuddi shunday, faqat `-f` siz:
+
+```bash
+docker compose run --rm api python -m app.reset_db --yes
+docker compose up -d
+```
+
+Eng qisqa yo'l (hamma volume bilan birga o'chadi — fayllar ham):
+
+```bash
+docker compose down -v && docker compose up -d --build
+```
+
+---
+
 ## Sinov ma'lumoti (ixtiyoriy)
 
 Tizimni to'ldirib ko'rsatish uchun:
 
 ```bash
-cd /opt/saff
-docker compose -f docker-compose.prod.yml exec api python -m app.fake_data
+docker compose -f docker-compose.prod.yml run --rm api python -m app.fake_data --reset
 ```
 
-12 obyekt, 32 xodim, ~760 vazifa yaratadi. Xodimlar paroli `1234`.
+Yaratadi: 10 bo'lim, 62 foydalanuvchi (boshliq + assistant + 10 bo'lim boshlig'i +
+50 asosiy bo'lim xodimi), 3 oylik tarix bilan ~360 vazifa. Hamma parol `1234`.
+Oxirida o'zini tekshiradi va "Mantiq tekshiruvi: HAMMASI TO'G'RI" deb yozadi.
 
 **Real ishni boshlashdan oldin tozalash:**
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api python -m app.fake_data --wipe
+docker compose -f docker-compose.prod.yml run --rm api python -m app.fake_data --wipe
 ```
 
-Admin foydalanuvchi, rollar va ish turlari joyida qoladi — baza toza bo'ladi.
+Boshliq hisobi va sozlamalar joyida qoladi — qolgani tozalanadi.
 
 ---
 

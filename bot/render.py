@@ -1,180 +1,166 @@
-"""Render task cards / keyboards."""
+"""Kartochkalar va tugmalar."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from config import settings
-from i18n import t, status_label, prio_label, block_label, field_label, STATUS_ICON
+from i18n import STATUS_ICON, T, field_label, role_label, status_label, t
 
-try:  # Bot API 7.11 / aiogram 3.15+ - bir bosishda matnni nusxa oladi
+try:  # Bot API 7.11 / aiogram 3.15+ — bir bosishda matnni nusxa oladi
     from aiogram.types import CopyTextButton
 except ImportError:  # eski aiogram: <pre> blokini bosib nusxa olinadi
     CopyTextButton = None
 
-COPY_LIMIT = 256  # Telegram cheklovi: copy_text.text uzunligi
+COPY_LIMIT = 256
+MANAGERS = ("boss", "assistant")
+
+# Menyu: (kalit, faqat boshqaruvchigami)
+MENU = [
+    ("btn_new", True), ("btn_submitted", True), ("btn_late", True),
+    ("btn_report", True), ("btn_people", True),
+    ("btn_my", False), ("btn_submit", False),
+    ("btn_lang", None),          # None - hammaga
+]
 
 
-def fmt_date(s) -> str:
-    if not s:
+def menu_keys(lang: str, role: str) -> list[str]:
+    mgr = role in MANAGERS
+    return [t(lang, k) for k, need in MENU if need is None or need == mgr]
+
+
+def main_menu(lang: str, role: str) -> ReplyKeyboardMarkup:
+    keys = menu_keys(lang, role)
+    rows, row = [], []
+    for k in keys:
+        row.append(KeyboardButton(text=k))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def cancel_kb(lang: str, done: bool = False) -> ReplyKeyboardMarkup:
+    row = []
+    if done:
+        row.append(KeyboardButton(text=t(lang, "btn_done")))
+    row.append(KeyboardButton(text=t(lang, "btn_cancel")))
+    return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True)
+
+
+# ---------------------------------------------------------------- sana
+def fmt_due(value, lang: str = "uz") -> str:
+    """«10.09.2026 18:00». Soat 18:00 bo'lsa ham ko'rsatiladi — muddat aniq bo'lsin."""
+    if not value:
         return "—"
     try:
-        d = date.fromisoformat(str(s)[:10])
-        return d.strftime("%d.%m")
-    except Exception:
-        return str(s)
+        d = datetime.fromisoformat(str(value)[:19])
+    except ValueError:
+        return str(value)
+    return d.strftime("%d.%m.%Y %H:%M")
 
 
-def loc_str(task: dict) -> str:
-    path = task.get("location_path") or []
-    s = " · ".join(p["name"] for p in path)
-    return s or task.get("project_name") or "—"
+def fmt_day(value) -> str:
+    if not value:
+        return "—"
+    try:
+        return datetime.fromisoformat(str(value)[:19]).strftime("%d.%m.%Y")
+    except ValueError:
+        return str(value)
 
 
+def late_text(lang: str, days: int, hours: int) -> str:
+    if days > 0:
+        return t(lang, "late_d", d=days)
+    return t(lang, "late_h", h=max(1, hours))
+
+
+# ---------------------------------------------------------------- vazifa kartochkasi
 def task_card(lang: str, tk: dict) -> str:
-    ov = ""
-    if tk.get("overdue_days"):
-        ov = "  " + t(lang, "overdue", d=tk["overdue_days"])
-    blocked = t(lang, "blocked_line", reason=block_label(lang, tk.get("blocked_reason")), note=tk.get("blocked_note") or "") if tk.get("status") == "blocked" else ""
-    deps = t(lang, "deps_line", codes=", ".join(tk["dependency_pending"])) if tk.get("dependency_pending") else ""
-    ret = t(lang, "ret_line", n=tk["return_count"]) if tk.get("return_count") else ""
-    return t(lang, "task_card", icon=STATUS_ICON.get(tk["status"], "▫️"), code=tk["code"], status=status_label(lang, tk["status"]),
-             title=tk["title"], loc=loc_str(tk), assignee=tk.get("assignee_name") or "—", reviewer=tk.get("reviewer_name") or "—",
-             start=fmt_date(tk["planned_start"]), end=fmt_date(tk["planned_end"]), overdue=ov,
-             ck_done=tk.get("checklist_done", 0), ck_total=tk.get("checklist_total", 0), photos=tk.get("photos_count", 0),
-             progress=tk.get("progress_percent", 0), blocked=blocked, deps=deps, ret=ret)
+    late = ""
+    if tk.get("is_late"):
+        late = (t(lang, "late_mark", days=tk["late_days"]) if tk.get("late_days")
+                else t(lang, "late_hours_mark", hours=max(1, tk.get("late_hours", 1))))
+    extra = ""
+    if tk.get("return_count"):
+        extra += t(lang, "returned_mark", n=tk["return_count"])
+    if tk.get("description"):
+        extra += t(lang, "desc_line", text=tk["description"][:300])
+    if tk.get("submit_note"):
+        extra += t(lang, "note_line", note=tk["submit_note"][:300])
+    if tk.get("proof_count"):
+        extra += t(lang, "proof_line", n=tk["proof_count"])
+    return t(lang, "task_card", icon=STATUS_ICON.get(tk["status"], "▫️"), code=tk["code"],
+             status=status_label(lang, tk["status"]), title=tk["title"],
+             assignee=tk.get("assignee_name") or "—", due=fmt_due(tk.get("due_at"), lang),
+             late=late, extra=extra)
 
 
-def task_kb(lang: str, tk: dict) -> InlineKeyboardMarkup:
+def task_kb(lang: str, tk: dict) -> InlineKeyboardMarkup | None:
     p = tk.get("permissions") or {}
     tid = tk["id"]
     b = InlineKeyboardBuilder()
     row = []
     if p.get("start"):
         row.append(InlineKeyboardButton(text=t(lang, "a_start"), callback_data=f"t:start:{tid}"))
-    if p.get("submit_review"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_review"), callback_data=f"t:review:{tid}"))
+    if p.get("submit"):
+        row.append(InlineKeyboardButton(text=t(lang, "a_submit"), callback_data=f"t:sub:{tid}"))
     if p.get("accept"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_accept"), callback_data=f"t:accept:{tid}"))
+        row.append(InlineKeyboardButton(text=t(lang, "a_accept"), callback_data=f"t:acc:{tid}"))
     if p.get("return"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_return"), callback_data=f"t:return:{tid}"))
+        row.append(InlineKeyboardButton(text=t(lang, "a_return"), callback_data=f"t:ret:{tid}"))
     if row:
         b.row(*row)
-    row = []
-    if p.get("progress"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_report"), callback_data=f"t:report:{tid}"))
-    if p.get("checklist") and tk.get("checklist_total"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_checklist"), callback_data=f"t:ck:{tid}"))
-    if p.get("block"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_block"), callback_data=f"t:block:{tid}"))
-    if p.get("unblock"):
-        row.append(InlineKeyboardButton(text=t(lang, "a_unblock"), callback_data=f"t:unblock:{tid}"))
-    if row:
-        b.row(*row)
-    row = [InlineKeyboardButton(text=t(lang, "a_comment"), callback_data=f"t:comment:{tid}"),
-           InlineKeyboardButton(text=t(lang, "a_refresh"), callback_data=f"t:show:{tid}")]
-    if settings.WEB_URL:
-        row.append(InlineKeyboardButton(text=t(lang, "a_open"), url=f"{settings.WEB_URL.rstrip('/')}/tasks/{tid}"))
-    b.row(*row)
+    b.row(InlineKeyboardButton(text=t(lang, "a_comment"), callback_data=f"t:cm:{tid}"))
     return b.as_markup()
 
 
-def tasks_list_kb(lang: str, tasks: list[dict]) -> InlineKeyboardMarkup:
+def list_kb(items: list[dict], prefix: str, label_key: str = "name", page: int = 0, per: int = 8,
+            extra: list[InlineKeyboardButton] | None = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for tk in tasks[:20]:
-        icon = STATUS_ICON.get(tk["status"], "▫️")
-        late = f" ⏱{tk['overdue_days']}" if tk.get("overdue_days") else ""
-        b.row(InlineKeyboardButton(text=f"{icon} {tk['code']} · {tk['title'][:40]}{late}", callback_data=f"t:show:{tk['id']}"))
+    for it in items[page * per:(page + 1) * per]:
+        b.row(InlineKeyboardButton(text=str(it[label_key])[:60], callback_data=f"{prefix}:{it['id']}"))
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{prefix}_pg:{page - 1}"))
+    if (page + 1) * per < len(items):
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{prefix}_pg:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    for x in extra or []:
+        b.row(x)
     return b.as_markup()
 
 
-def checklist_kb(lang: str, tk: dict) -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    for it in tk.get("checklist", []):
-        mark = "☑️" if it["is_done"] else "⬜"
-        req = "*" if it["is_required"] else ""
-        b.row(InlineKeyboardButton(text=f"{mark} {it['title'][:50]}{req}", callback_data=f"ck:{tk['id']}:{it['id']}:{0 if it['is_done'] else 1}"))
-    b.row(InlineKeyboardButton(text=t(lang, "btn_back"), callback_data=f"t:show:{tk['id']}"))
-    return b.as_markup()
-
-
-# menu button -> (permission it needs [None = everyone], roles that never see it even with the permission)
-# "admin" (superadmin/IT egasi) faqat kuzatadi va vazifa beradi - o'zi hech qachon ijrochi yoki
-# tekshiruvchi bo'lmaydi (default_reviewer ham admin'ni hech qachon tanlamaydi), shuning uchun
-# "o'z vazifangni bajarish" tugmalari (Vazifalarim/Kunlik hisobot/Muammo/Tekshiruv) unga ko'rsatilmaydi -
-# aks holda doim bo'sh ro'yxatga olib boradi va chalkashtiradi.
-MENU = [
-    ("btn_my", None, {"admin", "kuzatuvchi"}),
-    ("btn_report", "progress.create", {"admin"}),
-    ("btn_review", "tasks.accept", {"admin"}),
-    ("btn_new", "tasks.create", set()),
-    ("btn_problem", "tasks.block", {"admin"}),
-    ("btn_overdue", "reports.read", set()),
-    ("btn_blocked", "reports.read", set()),
-    ("btn_reports", "reports.read", set()),
-    ("btn_team", "admin.users", set()),
-    ("btn_search", None, set()),
-    ("btn_lang", None, set()),
-    ("btn_help", None, set()),
-]
-
-
-def menu_keys(lang: str, perms: set[str], role: str | None = None) -> list[str]:
-    return [t(lang, k) for k, need, hide_for in MENU if (need is None or need in perms) and role not in hide_for]
-
-
-def main_menu(lang: str, perms: set[str], role: str | None = None) -> ReplyKeyboardMarkup:
-    """The keyboard is built from the user's own permissions - each role gets its own bot."""
-    keys = menu_keys(lang, perms, role)
-    rows = [[KeyboardButton(text=k) for k in keys[i:i + 2]] for i in range(0, len(keys), 2)]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
-
-
-def cancel_kb(lang: str, skip: bool = False, done: bool = False) -> ReplyKeyboardMarkup:
-    row = []
-    if done:
-        row.append(KeyboardButton(text=t(lang, "btn_done")))
-    if skip:
-        row.append(KeyboardButton(text=t(lang, "btn_skip")))
-    row.append(KeyboardButton(text=t(lang, "btn_cancel")))
-    return ReplyKeyboardMarkup(keyboard=[row], resize_keyboard=True)
-
-
-def confirm_card(lang: str, d: dict, names: dict) -> str:
+# ---------------------------------------------------------------- yangi vazifa
+def confirm_card(lang: str, d: dict) -> str:
     voice = t(lang, "voice_head", text=d["transcript"][:300]) if d.get("transcript") else ""
     warn = ""
-    if not d.get("project_id"):
-        warn += t(lang, "no_project_warn")
     if not d.get("assignee_id"):
-        if d.get("assignee_candidates"):
-            warn += t(lang, "ambiguous_assignee", heard=d.get("assignee_name_heard") or "?")
-        else:
-            warn += t(lang, "no_assignee_warn")
-    if "no_deadline" in (d.get("warnings") or []):
-        warn += t(lang, "no_deadline_warn")
-    desc = f"\n📝 {d['description'][:200]}" if d.get("description") else ""
+        warn += (t(lang, "ambiguous_assignee", heard=d.get("assignee_name_heard") or "?")
+                 if d.get("assignee_candidates") else t(lang, "no_assignee_warn"))
+    if not d.get("due_at"):
+        warn += t(lang, "no_due_warn")
+    desc = t(lang, "desc_line", text=d["description"][:300]) if d.get("description") else ""
     return t(lang, "confirm_card", voice=voice, title=d.get("title") or "—",
-             assignee=names.get("assignee") or t(lang, "not_set"),
-             reviewer=names.get("reviewer") or t(lang, "not_set"), start=fmt_date(d.get("planned_start")),
-             end=fmt_date(d.get("planned_end")), prio=prio_label(lang, d.get("priority") or "normal"),
-             project=names.get("project") or t(lang, "not_set"), loc=names.get("location") or t(lang, "not_set"),
-             type=names.get("type") or t(lang, "not_set"), desc=desc, warn=warn)
+             assignee=d.get("assignee_name") or t(lang, "not_set"),
+             due=fmt_due(d.get("due_at"), lang) if d.get("due_at") else t(lang, "not_set"),
+             desc=desc, warn=warn)
 
 
 def confirm_kb(lang: str, d: dict) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if not d.get("assignee_id") and d.get("assignee_candidates"):
         for c in d["assignee_candidates"][:3]:
-            # bir xil ismli ikki odam bo'lsa hint ("Prorab · B blok") ularni ajratib turadi
             hint = f" · {c['hint']}" if c.get("hint") else ""
             b.row(InlineKeyboardButton(text=f"👤 {c['full_name']}{hint} ({c['score']}%)"[:64],
-                                       callback_data=f"nt:pick_a:{c['id']}"))
+                                       callback_data=f"nt:pick:{c['id']}"))
         b.row(InlineKeyboardButton(text=t(lang, "other_person"), callback_data="nt:edit:assignee"))
-    ready = bool(d.get("assignee_id") and d.get("project_id") and d.get("title") and d.get("type_id"))
     row = []
-    if ready:
+    if d.get("assignee_id") and d.get("title") and d.get("due_at"):
         row.append(InlineKeyboardButton(text=t(lang, "c_send"), callback_data="nt:send"))
     row.append(InlineKeyboardButton(text=t(lang, "c_edit"), callback_data="nt:edit"))
     row.append(InlineKeyboardButton(text=t(lang, "c_cancel"), callback_data="nt:cancel"))
@@ -182,29 +168,16 @@ def confirm_kb(lang: str, d: dict) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-DASH = "—"
-BLOCK_ORDER = ("title", "assignee", "reviewer", "project", "location", "type", "deadline", "priority", "description")
+BLOCK_ORDER = ("title", "assignee", "due", "description")
 
 
-def task_block(lang: str, d: dict, names: dict) -> str:
-    """Vazifani oddiy matn qilib beradi - foydalanuvchi shuni nusxa olib, xohlagan joyini
-    o'zgartirib qaytaradi. Har satr «Kalit: qiymat», shuning uchun qaytganda aniq o'qiladi."""
-    end = d.get("planned_end")
-    try:
-        end = date.fromisoformat(str(end)[:10]).strftime("%d.%m.%Y") if end else DASH
-    except (TypeError, ValueError):
-        end = str(end)
+def task_block(lang: str, d: dict) -> str:
+    """Vazifani oddiy matn qilib beradi — nusxa olib, xohlagan joyini tuzatib qaytariladi."""
     vals = {
-        "title": d.get("title") or DASH,
-        "assignee": names.get("assignee") or DASH,
-        "reviewer": names.get("reviewer") or DASH,
-        "project": names.get("project") or DASH,
-        "location": names.get("location") or DASH,
-        "type": names.get("type") or DASH,
-        "deadline": end,
-        "priority": prio_label(lang, d.get("priority") or "normal"),
-        # tavsif ko'p satrli bo'lsa blok buzilmasin
-        "description": " ".join((d.get("description") or DASH).split()),
+        "title": d.get("title") or "—",
+        "assignee": d.get("assignee_name") or "—",
+        "due": fmt_due(d.get("due_at"), lang) if d.get("due_at") else "—",
+        "description": " ".join((d.get("description") or "—").split()),
     }
     return "\n".join(f"{field_label(lang, k)}: {vals[k]}" for k in BLOCK_ORDER)
 
@@ -221,70 +194,122 @@ def edit_block_kb(lang: str, block: str) -> InlineKeyboardMarkup:
 def edit_menu_kb(lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.row(InlineKeyboardButton(text=t(lang, "e_title"), callback_data="nt:edit:title"),
-          InlineKeyboardButton(text=t(lang, "e_assignee"), callback_data="nt:edit:assignee"))
-    b.row(InlineKeyboardButton(text=t(lang, "e_reviewer"), callback_data="nt:edit:reviewer"))
-    b.row(InlineKeyboardButton(text=t(lang, "e_deadline"), callback_data="nt:edit:deadline"),
-          InlineKeyboardButton(text=t(lang, "e_prio"), callback_data="nt:edit:prio"))
-    b.row(InlineKeyboardButton(text=t(lang, "e_project"), callback_data="nt:edit:project"),
-          InlineKeyboardButton(text=t(lang, "e_loc"), callback_data="nt:edit:loc"))
-    b.row(InlineKeyboardButton(text=t(lang, "e_type"), callback_data="nt:edit:type"),
+          InlineKeyboardButton(text=t(lang, "e_who"), callback_data="nt:edit:assignee"))
+    b.row(InlineKeyboardButton(text=t(lang, "e_due"), callback_data="nt:edit:due"),
           InlineKeyboardButton(text=t(lang, "e_desc"), callback_data="nt:edit:desc"))
     b.row(InlineKeyboardButton(text=t(lang, "btn_back"), callback_data="nt:back"))
     return b.as_markup()
 
 
-def deadline_kb(lang: str) -> InlineKeyboardMarkup:
+def due_kb(lang: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text=t(lang, "d_today"), callback_data="nt:dl:0"),
-          InlineKeyboardButton(text=t(lang, "d_tomorrow"), callback_data="nt:dl:1"),
-          InlineKeyboardButton(text=t(lang, "d_3"), callback_data="nt:dl:3"))
-    b.row(InlineKeyboardButton(text=t(lang, "d_week"), callback_data="nt:dl:7"),
-          InlineKeyboardButton(text=t(lang, "d_2w"), callback_data="nt:dl:14"),
-          InlineKeyboardButton(text=t(lang, "d_month"), callback_data="nt:dl:eom"))
-    b.row(InlineKeyboardButton(text=t(lang, "d_custom"), callback_data="nt:dl:custom"))
+    b.row(InlineKeyboardButton(text=t(lang, "d_today"), callback_data="nt:due:0"),
+          InlineKeyboardButton(text=t(lang, "d_tomorrow"), callback_data="nt:due:1"),
+          InlineKeyboardButton(text=t(lang, "d_3"), callback_data="nt:due:3"))
+    b.row(InlineKeyboardButton(text=t(lang, "d_week"), callback_data="nt:due:7"),
+          InlineKeyboardButton(text=t(lang, "d_custom"), callback_data="nt:due:custom"))
     return b.as_markup()
 
 
-def prio_kb(lang: str) -> InlineKeyboardMarkup:
+# ---------------------------------------------------------------- hisobot
+def report_kb(lang: str, period: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🟢 " + prio_label(lang, "low"), callback_data="nt:prio:low"),
-          InlineKeyboardButton(text="🟡 " + prio_label(lang, "normal"), callback_data="nt:prio:normal"),
-          InlineKeyboardButton(text="🔴 " + prio_label(lang, "high"), callback_data="nt:prio:high"))
-    return b.as_markup()
-
-
-def list_kb(items: list[dict], prefix: str, label_key: str = "name", page: int = 0, per: int = 8,
-            extra: list[InlineKeyboardButton] | None = None, skip_cb: str | None = None, skip_text: str = "⏭") -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    chunk = items[page * per:(page + 1) * per]
-    for it in chunk:
-        b.row(InlineKeyboardButton(text=str(it[label_key])[:48], callback_data=f"{prefix}:{it['id']}"))
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"{prefix}_pg:{page - 1}"))
-    if (page + 1) * per < len(items):
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"{prefix}_pg:{page + 1}"))
-    if nav:
-        b.row(*nav)
-    if skip_cb:
-        b.row(InlineKeyboardButton(text=skip_text, callback_data=skip_cb))
-    if extra:
-        b.row(*extra)
-    return b.as_markup()
-
-
-def block_reasons_kb(lang: str, tid: int) -> InlineKeyboardMarkup:
-    from i18n import BLOCK
-    b = InlineKeyboardBuilder()
-    codes = list(BLOCK["uz"].keys())
-    for i in range(0, len(codes), 2):
-        b.row(*[InlineKeyboardButton(text=block_label(lang, c), callback_data=f"blk:{tid}:{c}") for c in codes[i:i + 2]])
+    mark = {"week": "rep_week", "month": "rep_month", "year": "rep_year"}
+    b.row(*[InlineKeyboardButton(text=("• " if p == period else "") + t(lang, k),
+                                 callback_data=f"rep:{p}") for p, k in mark.items()])
+    b.row(InlineKeyboardButton(text=t(lang, "rep_xlsx"), callback_data=f"rep:dl:xlsx:{period}"),
+          InlineKeyboardButton(text=t(lang, "rep_csv"), callback_data=f"rep:dl:csv:{period}"))
     return b.as_markup()
 
 
 def lang_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.row(InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="lang:uz"),
-          InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang:ru"),
-          InlineKeyboardButton(text="🇬🇧 English", callback_data="lang:en"))
+    b.row(*[InlineKeyboardButton(text=n, callback_data=f"lang:{c}")
+            for c, n in (("uz", "O'zbekcha"), ("ru", "Русский"), ("en", "English"))])
     return b.as_markup()
+
+
+# ---------------------------------------------------------------- xabarlar (outbox)
+def notif_text(lang: str, event: str, p: dict) -> str:
+    """Backend navbatga qo'ygan xabarni o'qiladigan matnga aylantiradi."""
+    dep = f" · {p['department']}" if p.get("department") else ""
+    due = fmt_due(p.get("due_at"), lang)
+    if event == "reminder":
+        head = t(lang, "n_reminder_late") if p.get("overdue") else (
+            t(lang, "n_reminder_due") if str(p.get("due_at", ""))[:10] == _today() else
+            t(lang, "n_reminder_soon"))
+        return t(lang, "n_reminder", head=head, code=p.get("code", ""),
+                 title=p.get("title", ""), due=due)
+    if event == "overdue_alert":
+        return t(lang, "n_overdue_alert", code=p.get("code", ""), title=p.get("title", ""),
+                 assignee=p.get("assignee_name", "—"), dep=dep, due=due,
+                 late=late_text(lang, p.get("late_days", 0), p.get("late_hours", 0)))
+    if event == "overdue_digest":
+        items = "\n".join(f"• {i['code']} {i['title'][:40]} — {i['assignee_name']} "
+                          f"({t(lang, 'late_d', d=i['late_days'])})" for i in p.get("items", []))
+        return t(lang, "n_overdue_digest", count=p.get("count", 0), items=items)
+    if event == "due_today":
+        items = "\n".join(f"• {i['code']} {i['title'][:40]} — {i['assignee_name']} "
+                          f"({fmt_due(i['due_at'], lang)[-5:]})" for i in p.get("items", []))
+        return t(lang, "n_due_today", count=p.get("count", 0), items=items)
+    if event == "task_submitted":
+        return t(lang, "n_task_submitted", code=p.get("code", ""), title=p.get("title", ""),
+                 assignee=p.get("assignee_name", "—"), dep=dep, due=due,
+                 ontime=t(lang, "on_time_yes" if p.get("on_time") else "on_time_no"),
+                 proofs=p.get("proof_count", 0), note=p.get("note", ""))
+    if event == "due_changed":
+        return t(lang, "n_due_changed", code=p.get("code", ""), title=p.get("title", ""),
+                 old=fmt_due(p.get("old_due"), lang), due=due)
+    simple = {
+        "task_created": dict(code=p.get("code", ""), title=p.get("title", ""), due=due,
+                             actor=p.get("actor_name", "")),
+        "task_started": dict(code=p.get("code", ""), title=p.get("title", ""),
+                             actor=p.get("actor_name", "")),
+        "task_accepted": dict(code=p.get("code", ""), title=p.get("title", ""),
+                              actor=p.get("actor_name", "")),
+        "task_returned": dict(code=p.get("code", ""), title=p.get("title", ""),
+                              reason=p.get("reason", "")),
+        "task_cancelled": dict(code=p.get("code", ""), title=p.get("title", ""),
+                               reason=p.get("reason", "")),
+        "task_unassigned": dict(code=p.get("code", ""), title=p.get("title", "")),
+        "comment": dict(code=p.get("code", ""), title=p.get("title", ""),
+                        actor=p.get("actor_name", ""), text=p.get("text", "")),
+    }
+    if event in simple:
+        return t(lang, f"n_{event}", **simple[event])
+    return f"{p.get('code', '')} {p.get('title', '')}".strip() or "—"
+
+
+def _today() -> str:
+    from datetime import date
+    return date.today().isoformat()
+
+
+def notif_kb(lang: str, event: str, p: dict) -> InlineKeyboardMarkup | None:
+    """Xabarning o'zidan bir bosishda ish qilish — ro'yxatni ochish shart emas."""
+    tid = p.get("id")
+    if not tid:
+        return None
+    b = InlineKeyboardBuilder()
+    if event == "task_submitted":
+        b.row(InlineKeyboardButton(text=t(lang, "a_accept"), callback_data=f"t:acc:{tid}"),
+              InlineKeyboardButton(text=t(lang, "a_return"), callback_data=f"t:ret:{tid}"))
+        return b.as_markup()
+    if event in ("task_created", "reminder", "task_returned"):
+        b.row(InlineKeyboardButton(text=t(lang, "a_submit"), callback_data=f"t:sub:{tid}"),
+              InlineKeyboardButton(text=t(lang, "a_comment"), callback_data=f"t:cm:{tid}"))
+        return b.as_markup()
+    if event == "overdue_alert":
+        b.row(InlineKeyboardButton(text=t(lang, "a_open"), callback_data=f"t:open:{tid}"))
+        return b.as_markup()
+    return None
+
+
+def people_text(lang: str, rows: list[dict]) -> str:
+    out = [t(lang, "people_head"), ""]
+    for u in rows:
+        dep = f" · {u['department_name']}" if u.get("department_name") else ""
+        late = f" · ⏰ {u['late_tasks']}" if u.get("late_tasks") else ""
+        out.append("• " + t(lang, "people_row", name=u["full_name"], role=role_label(lang, u["role"]),
+                            dep=dep, open=u.get("open_tasks", 0), late=late))
+    return "\n".join(out)

@@ -1,22 +1,29 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import (verify_password, make_access_token, make_refresh_token, get_ctx, Ctx)
+from ..auth import Ctx, get_ctx, hash_password, make_access_token, make_refresh_token, validate_password_strength, verify_password
 from ..config import settings
 from ..db import get_db
 from ..errors import ApiError, unauthorized
-from ..models import User, RefreshToken
-from ..schemas import LoginIn, TokenOut, RefreshIn, MeOut, UserOut
+from ..models import RefreshToken, User
 from ..redis_client import rds
+from ..schemas import LoginIn, MeIn, RefreshIn, TokenOut, UserOut
+from ..services import tasks as svc
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _attempt_key(login: str, ip: str) -> str:
     return f"login_attempts:{login.lower()}:{ip}"
+
+
+def _token_out(db: Session, user: User) -> TokenOut:
+    return TokenOut(access_token=make_access_token(user), refresh_token=make_refresh_token(db, user),
+                    expires_in=settings.ACCESS_TTL_MIN * 60,
+                    user=UserOut(**svc.user_out(db, user, user.lang)))
 
 
 @router.post("/login", response_model=TokenOut)
@@ -33,8 +40,7 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     rds.delete(key)
     user.last_login_at = datetime.utcnow()
     db.commit()
-    return TokenOut(access_token=make_access_token(user), refresh_token=make_refresh_token(db, user),
-                    expires_in=settings.ACCESS_TTL_MIN * 60)
+    return _token_out(db, user)
 
 
 @router.post("/refresh", response_model=TokenOut)
@@ -47,8 +53,7 @@ def refresh(body: RefreshIn, db: Session = Depends(get_db)):
         raise unauthorized()
     rt.revoked = True
     db.commit()
-    return TokenOut(access_token=make_access_token(user), refresh_token=make_refresh_token(db, user),
-                    expires_in=settings.ACCESS_TTL_MIN * 60)
+    return _token_out(db, user)
 
 
 @router.post("/logout")
@@ -60,8 +65,27 @@ def logout(body: RefreshIn, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.get("/me", response_model=MeOut)
-def me(ctx: Ctx = Depends(get_ctx)):
+@router.get("/me", response_model=UserOut)
+def me(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    counts = svc.task_counts(db, [ctx.user.id]).get(ctx.user.id, {})
+    return UserOut(**svc.user_out(db, ctx.user, ctx.user.lang, counts))
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(body: MeIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
     u = ctx.user
-    return MeOut(user=UserOut.model_validate(u), permissions=sorted(ctx.perms),
-                 scope={"type": u.scope_type, "id": u.scope_id})
+    if body.full_name:
+        u.full_name = body.full_name.strip()
+    if body.phone is not None:
+        u.phone = body.phone.strip() or None
+    if body.lang:
+        u.lang = body.lang
+    if body.password:
+        validate_password_strength(body.password)
+        u.password_hash = hash_password(body.password)
+        # parol almashsa eski sessiyalar yopiladi
+        for rt in db.scalars(select(RefreshToken).where(RefreshToken.user_id == u.id, RefreshToken.revoked.is_(False))):
+            rt.revoked = True
+    db.commit()
+    db.refresh(u)
+    return UserOut(**svc.user_out(db, u, u.lang))

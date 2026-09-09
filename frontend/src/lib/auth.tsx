@@ -1,23 +1,38 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { api, onUnauthorized, tokens, invalidate } from './api'
-import { useT, Lang } from './i18n'
+import { api, invalidate, onUnauthorized, tokens } from './api'
+import { Lang, useT } from './i18n'
 
-export type Me = { user: any; permissions: string[]; scope: { type: string; id: number | null } }
+export type User = {
+  id: number; full_name: string; login: string; role: string; role_name: string
+  position: string | null; phone: string | null
+  department_id: number | null; department_name: string | null
+  lang: Lang; telegram_user_id: number | null; is_active: boolean
+  open_tasks: number; late_tasks: number
+}
 
-type AuthCtx = { me: Me | null; loading: boolean; login: (l: string, p: string) => Promise<void>; logout: () => void; can: (p: string) => boolean; reload: () => Promise<void> }
+const MANAGERS = ['boss', 'assistant']
+
+type AuthCtx = {
+  me: User | null
+  loading: boolean
+  isManager: boolean
+  login: (l: string, p: string) => Promise<void>
+  logout: () => void
+  reload: () => Promise<void>
+}
 const Ctx = createContext<AuthCtx>(null as any)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [me, setMe] = useState<Me | null>(null)
+  const [me, setMe] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const { setLang } = useT()
 
   const reload = useCallback(async () => {
     if (!tokens.access && !tokens.refresh) { setMe(null); setLoading(false); return }
     try {
-      const m = await api<Me>('/auth/me')
-      setMe(m)
-      if (m.user?.lang) setLang(m.user.lang as Lang)
+      const u = await api<User>('/auth/me')
+      setMe(u)
+      if (u?.lang) setLang(u.lang)
     } catch { setMe(null) } finally { setLoading(false) }
   }, [])
 
@@ -34,8 +49,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (rt) api('/auth/logout', { method: 'POST', body: { refresh_token: rt }, retry: false }).catch(() => {})
     tokens.clear(); setMe(null)
   }
-  const can = (p: string) => !!me?.permissions?.includes(p)
-  return <Ctx.Provider value={{ me, loading, login, logout, can, reload }}>{children}</Ctx.Provider>
+
+  return (
+    <Ctx.Provider value={{ me, loading, isManager: !!me && MANAGERS.includes(me.role), login, logout, reload }}>
+      {children}
+    </Ctx.Provider>
+  )
 }
 
 export const useAuth = () => useContext(Ctx)

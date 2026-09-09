@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react'
 import { useT } from '../lib/i18n'
 
-export function Modal({ title, children, footer, onClose, sm }: {
-  title: string; children: React.ReactNode; footer?: React.ReactNode; onClose: () => void; sm?: boolean
+/** Oyna. Ichki qismini chaqiruvchi beradi: `.modal__b` (tanasi) va `.modal__f` (tugmalar). */
+export default function Modal({ title, children, onClose, small }: {
+  title: string; children: React.ReactNode; onClose: () => void; small?: boolean
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -11,10 +12,12 @@ export function Modal({ title, children, footer, onClose, sm }: {
   }, [onClose])
   return (
     <div className="modal-bg" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className={'modal' + (sm ? ' modal--sm' : '')}>
-        <div className="modal__h"><b>{title}</b><span className="spacer" /><button className="btn btn--sm btn--ghost" onClick={onClose}>✕</button></div>
-        <div className="modal__b">{children}</div>
-        {footer && <div className="modal__f">{footer}</div>}
+      <div className={'modal' + (small ? ' modal--sm' : '')}>
+        <div className="modal__h">
+          <b>{title}</b><span className="spacer" />
+          <button className="btn btn--sm btn--ghost" onClick={onClose} aria-label="close">✕</button>
+        </div>
+        {children}
       </div>
     </div>
   )
@@ -23,10 +26,11 @@ export function Modal({ title, children, footer, onClose, sm }: {
 export function Confirm({ text, onOk, onClose }: { text: string; onOk: () => void; onClose: () => void }) {
   const { t } = useT()
   return (
-    <Modal title={text} sm onClose={onClose} footer={
-      <><button className="btn" onClick={onClose}>{t('cancel')}</button>
-        <button className="btn btn--danger" onClick={onOk}>{t('yes')}</button></>}>
-      <div className="full muted small">&nbsp;</div>
+    <Modal title={text} small onClose={onClose}>
+      <div className="modal__f">
+        <button className="btn" onClick={onClose}>{t('cancel')}</button>
+        <button className="btn btn--danger" onClick={onOk}>{t('yes')}</button>
+      </div>
     </Modal>
   )
 }
