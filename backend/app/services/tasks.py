@@ -109,6 +109,20 @@ def notify_managers(db: Session, event: str, task: Task, exclude: Optional[int] 
         notify(db, m.id, event, task, payload)
 
 
+# ---------------------------------------------------------------- dalil kimga shart
+def proof_required(db: Session, task: Task) -> bool:
+    """Dalil (rasm/fayl) topshirishda shartmi.
+
+    Umumiy qoida — shart: ish bajarilganini ko'rsatadigan narsa bo'lishi kerak.
+    Istisno: **boshliq bilan assistant bir-biriga bergan vazifa**. Ular teng va ko'pincha
+    bir-biriga savol yoki topshiriq beradi ("shartnoma qanday bo'ldi?") — bunday ishning
+    dalili bo'lmaydi, javobning o'zi yetadi.
+    """
+    who = db.get(User, task.assignee_id)
+    by = db.get(User, task.created_by)
+    return not (who and by and who.role in MANAGERS and by.role in MANAGERS)
+
+
 # ---------------------------------------------------------------- ruxsatlar (UI uchun)
 def task_perms(ctx: Ctx, task: Task) -> dict:
     mine = task.assignee_id == ctx.user.id
@@ -176,6 +190,7 @@ def enrich(db: Session, tasks: list[Task], ctx: Ctx, *, detail: bool = False) ->
             "is_late": late > 0,
             "late_days": late // 86400, "late_hours": late // 3600,
             "proof_count": proofs.get(t.id, 0), "comment_count": comments.get(t.id, 0),
+            "needs_proof": proof_required(db, t),
             "permissions": task_perms(ctx, t),
             "files": [], "comments": [],
         }

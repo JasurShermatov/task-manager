@@ -193,13 +193,15 @@ def _fresh_proofs(db: Session, t: Task) -> int:
 
 @router.post("/tasks/{task_id}/submit", response_model=TaskOut)
 def submit(task_id: int, body: SubmitIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
-    """Topshirish — dalilsiz bo'lmaydi. Fayllar avval /tasks/{id}/files ga yuklanadi."""
+    """Topshirish. Dalil odatda shart; boshliq bilan assistant bir-biriga bergan
+    vazifada shart emas (qarang: svc.proof_required). Fayllar avval
+    /tasks/{id}/files ga yuklanadi."""
     t = _get(db, ctx, task_id)
     if t.assignee_id != ctx.user.id:
         raise permission_denied()
     if t.status not in (NEW, PROGRESS):
         raise invalid_transition(t.status, SUBMITTED)
-    if not _fresh_proofs(db, t):
+    if svc.proof_required(db, t) and not _fresh_proofs(db, t):
         raise validation("PROOF_REQUIRED",
                          "Dalil kerak: kamida bitta rasm yoki fayl biriktiring.",
                          field_errors={"files": "required"})

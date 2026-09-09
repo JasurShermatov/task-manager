@@ -185,6 +185,8 @@ class TaskOut(Model):
     late_hours: int = 0
     proof_count: int = 0
     comment_count: int = 0
+    # dalil shartmi: boshliq bilan assistant bir-biriga bergan vazifada shart emas
+    needs_proof: bool = True
     permissions: dict = {}
     files: list[FileOut] = []
     comments: list[CommentOut] = []

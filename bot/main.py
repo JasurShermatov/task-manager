@@ -479,9 +479,16 @@ async def submit_chosen(cb: CallbackQuery, state: FSMContext, u: dict, lang: str
 
 
 async def begin_submit(msg: Message, state: FSMContext, u: dict, lang: str, task_id: int):
+    # Dalil shartmi - buni serverdan so'raymiz, rolga qarab o'zimiz hisoblamaymiz:
+    # qoida bitta joyda tursin (svc.proof_required).
+    need_proof = True
+    try:
+        need_proof = (await api.task(u["id"], task_id)).get("needs_proof", True)
+    except Exception:  # noqa: BLE001 - so'rov o'tmasa, xavfsiz tomonga o'tamiz
+        pass
     await state.clear()
     await state.set_state(Submit.note)
-    await state.update_data(task_id=task_id, files=0)
+    await state.update_data(task_id=task_id, files=0, need_proof=need_proof)
     await msg.answer(t(lang, "sb_note"), reply_markup=cancel_kb(lang))
 
 
@@ -490,8 +497,10 @@ async def submit_note(msg: Message, state: FSMContext, u: dict, lang: str):
     if is_cancel(msg):
         return await cancel_any(msg, state, u, lang)
     await state.update_data(note=msg.text.strip()[:2000])
+    d = await state.get_data()
     await state.set_state(Submit.files)
-    await msg.answer(t(lang, "sb_files"), reply_markup=cancel_kb(lang, done=True))
+    key = "sb_files" if d.get("need_proof", True) else "sb_files_opt"
+    await msg.answer(t(lang, key), reply_markup=cancel_kb(lang, done=True))
 
 
 @router.message(Submit.files, F.photo | F.document)
@@ -517,9 +526,11 @@ async def submit_finish(msg: Message, state: FSMContext, u: dict, lang: str):
     if is_cancel(msg):
         return await cancel_any(msg, state, u, lang)
     if (msg.text or "").strip() not in {T[x]["btn_done"] for x in T}:
-        return await msg.answer(t(lang, "sb_files"), reply_markup=cancel_kb(lang, done=True))
+        d0 = await state.get_data()
+        return await msg.answer(t(lang, "sb_files" if d0.get("need_proof", True) else "sb_files_opt"),
+                                reply_markup=cancel_kb(lang, done=True))
     d = await state.get_data()
-    if not d.get("files"):
+    if d.get("need_proof", True) and not d.get("files"):
         return await msg.answer(t(lang, "sb_need_file"), reply_markup=cancel_kb(lang, done=True))
     await state.clear()
     try:

@@ -447,3 +447,29 @@ async def test_send_without_a_person_opens_the_person_list(world):
     await bot.nt_send(cb, st, u, "uz")
     assert cb.alerts and cb.alerts[0] == t("uz", "need_assignee")
     assert s.last == t("uz", "nt_who"), "odamlar ro'yxati ochilishi kerak"
+
+
+# ---------------------------------------------------------------- dalilsiz topshirish
+@pytest.mark.asyncio
+async def test_managers_submit_to_each_other_without_proof(world):
+    """Assistant boshliqqa savol-vazifa beradi — boshliq rasm izlab o'tirmasdan javob
+    yozib topshiradi. Qolgan hamma uchun dalil avvalgidek majburiy."""
+    from api import api
+    mk = ctx_factory()
+    boss_tg, a_tg = world["tg"]["boss"], world["tg"]["assistant"]
+    boss_u, a_u = await resolve(boss_tg), await resolve(a_tg)
+
+    tk = await api.create_task(a_u["id"], {"title": "Shartnoma qanday bo'ldi?",
+                                           "assignee_id": boss_u["id"], "due_at": D(1)})
+    st = mk(boss_tg)
+    s = Sent()
+    await bot.begin_submit(FakeMsg(s, boss_tg), st, boss_u, "uz", tk["id"])
+    await bot.submit_note(FakeMsg(s, boss_tg, text="Imzolandi, ertaga nusxasi keladi"),
+                          st, boss_u, "uz")
+    assert t("uz", "sb_files_opt") in s.texts, "dalil ixtiyoriy ekani aytilishi kerak"
+
+    s2 = Sent()
+    await bot.submit_finish(FakeMsg(s2, boss_tg, text=t("uz", "btn_done")), st, boss_u, "uz")
+    assert t("uz", "sb_need_file") not in s2.texts, "dalil so'ralmasligi kerak"
+    assert tk["code"] in " ".join(s2.texts)
+    assert (await api.task(a_u["id"], tk["id"]))["status"] == "submitted"
