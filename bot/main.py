@@ -18,7 +18,7 @@ from typing import Any, Optional
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramUnauthorizedError
+from aiogram.exceptions import TelegramBadRequest, TelegramConflictError, TelegramUnauthorizedError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -925,6 +925,42 @@ Diqqat: .env dagi token bilan bot ishlaydi. Boshqa hech narsa o'zgartirilmaydi.
 ========================================================================"""
 
 
+CONFLICT_HELP = """
+========================================================================
+BOSHQA BOT AYNAN SHU TOKEN BILAN ISHLAYAPTI.
+
+Telegram bitta tokenga bitta ulanish beradi. Ikkinchisi ishga tushsa, xabarlar
+ikkisi o'rtasida bo'linib ketadi: kod yuborasiz, uni boshqa nusxa ushlab, o'z
+bazasidan qidiradi va "Kod noto'g'ri" deydi.
+
+Ko'p uchraydigan sabab: serverda eski nusxa ishlab turibdi, siz esa uni mahalliy
+kompyuterda ham ishga tushirgansiz (yoki aksincha).
+
+Yechim (bittasini tanlang):
+  1) Ikkinchi nusxani to'xtating:
+       serverda -> docker compose -f docker-compose.prod.yml stop bot
+       mahalliy -> docker compose stop bot
+  2) Yoki sinash uchun @BotFather dan ALOHIDA bot oching va uning tokenini
+     mahalliy .env ga qo'ying. Shunda server boti tegilmaydi.
+
+Bot to'xtamaydi - ikkinchi nusxa o'chgach o'zi ishlab ketadi.
+========================================================================"""
+
+
+async def warn_if_conflict(bot: Bot):
+    """Ishga tushishda bir marta tekshiramiz: shu token bilan boshqa nusxa ishlayaptimi.
+
+    Aks holda aiogram har bir necha soniyada bir xil ERROR yozadi va sabab ko'rinmaydi -
+    aslida muammo kodda emas, ikkinchi nusxada.
+    """
+    try:
+        await bot.get_updates(offset=-1, limit=1, timeout=0)
+    except TelegramConflictError:
+        log.error("%s", CONFLICT_HELP)
+    except Exception:  # noqa: BLE001 - tekshiruv ishga tushishga to'sqinlik qilmasin
+        pass
+
+
 async def main():
     if not settings.BOT_TOKEN or ":" not in settings.BOT_TOKEN:
         log.error("BOT_TOKEN .env da yo'q yoki noto'g'ri ko'rinishda.%s", TOKEN_HELP)
@@ -955,8 +991,9 @@ async def main():
     except Exception as e:  # noqa: BLE001 - API keyinroq ko'tariladi, bot ishlayveradi
         log.warning("username API ga yozilmadi (%s) — keyin qayta yoziladi", type(e).__name__)
 
-    asyncio.create_task(outbox_worker(bot))
     await bot.delete_webhook(drop_pending_updates=False)
+    await warn_if_conflict(bot)
+    asyncio.create_task(outbox_worker(bot))
     log.info("bot ishga tushdi")
     await dp.start_polling(bot)
 

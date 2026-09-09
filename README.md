@@ -55,6 +55,7 @@ bajarilmagani va qaytarilgani aralash, hisobot darhol ko'rinsin uchun. Oxirida o
 | `BAZA ESKI (1.0)` | 1.0 dan qolgan baza. `./fresh.sh` yoki `reset_db --yes` |
 | `BOT TOKENI NOTO'G'RI` | `.env` dagi `BOT_TOKEN` eskirgan. @BotFather → `/mybots` → API Token |
 | Web ochiladi, login ishlamaydi | API ko'tarilmagan: `docker compose logs api` |
+| `TelegramConflictError` yoki botda «Kod noto'g'ri» | **Shu token bilan ikkinchi bot ishlayapti** (ko'pincha serverdagi eski nusxa). Bittasini to'xtating yoki sinash uchun @BotFather dan alohida bot oching |
 
 ---
 
