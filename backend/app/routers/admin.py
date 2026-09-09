@@ -1,8 +1,13 @@
 """Administratsiya — faqat boss va assistant.
 
-Ikkita alohida ro'yxat, chunki ular ikki xil ish:
+Uchta alohida ro'yxat, chunki ular uch xil ish:
   * `/departments` + `/users?role=bolim_boshligi`  -> "Bo'limlar" oynasi
   * `/users?role=ijrochi`                          -> "Asosiy bo'lim xodimlari" oynasi
+  * `/users?role=assistant`                        -> "Assistantlar" oynasi (faqat boshliqqa)
+
+Boss va assistant kundalik ishda huquqda teng. Yagona farq shu faylda: **assistant
+hisoblarini faqat boshliq boshqaradi**. Aks holda assistant o'ziga yana bir assistant
+ochib yoki boshliqni bloklab, tepadagi qatlamni o'zi to'ldirib olardi.
 """
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ from ..auth import Ctx, get_ctx, hash_password, validate_password_strength
 from ..db import get_db
 from ..errors import not_found, validation
 from ..models import (
-    HEAD, MANAGERS, NEW, PROGRESS, SUBMITTED, WORKER, Department, RefreshToken, Task, User,
+    BOSS, HEAD, MANAGERS, NEW, PROGRESS, SUBMITTED, WORKER, Department, RefreshToken, Task, User,
 )
 from ..schemas import DepartmentIn, DepartmentOut, PasswordIn, UserIn, UserOut, UserPatch
 from ..services import tasks as svc
@@ -150,9 +155,19 @@ def _check_department(db: Session, role: str, department_id: Optional[int], user
     return None
 
 
+def _guard_top(ctx: Ctx, *roles: Optional[str]):
+    """Boshliq yoki assistant qatoriga tegadigan har qanday amal — faqat boshliqda.
+    `roles` ga amalga aloqador rollarni beramiz: odamning hozirgi roli va (bo'lsa)
+    unga berilayotgan yangi rol. Shu bilan assistantni assistant ochishi ham,
+    ijrochini assistantga ko'tarishi ham, boshliqni bloklashi ham to'siladi."""
+    if any(r in MANAGERS for r in roles if r):
+        ctx.require_boss()
+
+
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(body: UserIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
     ctx.require_manager()
+    _guard_top(ctx, body.role)
     login = body.login.strip().lower()
     if db.scalar(select(User).where(func.lower(User.login) == login)):
         raise validation("LOGIN_TAKEN", "Bu login band.", field_errors={"login": "taken"})
@@ -174,6 +189,9 @@ def update_user(user_id: int, body: UserPatch, ctx: Ctx = Depends(get_ctx), db: 
     only_lang = {k for k, v in body.model_dump(exclude_unset=True).items() if v is not None} <= {"lang"}
     if not (only_lang and u.id == ctx.user.id):
         ctx.require_manager()
+        # o'z profilini har kim `/auth/me` orqali o'zgartiradi; bu yer boshqa odam uchun
+        if u.id != ctx.user.id:
+            _guard_top(ctx, u.role, body.model_dump(exclude_unset=True).get("role"))
 
     data = body.model_dump(exclude_unset=True)
     if "login" in data and data["login"]:
@@ -222,6 +240,7 @@ def _set_active(db: Session, ctx: Ctx, u: User, active: bool):
 def block_user(user_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
     ctx.require_manager()
     u = db.get(User, user_id) or _raise_user()
+    _guard_top(ctx, u.role)
     _set_active(db, ctx, u, False)
     db.commit()
     return UserOut(**svc.user_out(db, u, ctx.user.lang))
@@ -231,6 +250,7 @@ def block_user(user_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(
 def unblock_user(user_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
     ctx.require_manager()
     u = db.get(User, user_id) or _raise_user()
+    _guard_top(ctx, u.role)
     # bloklangan boshliq qaytsa, bo'limi band bo'lib qolgan bo'lishi mumkin
     if u.role == HEAD:
         _check_department(db, HEAD, u.department_id, user_id=u.id)
@@ -243,6 +263,8 @@ def unblock_user(user_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depend
 def set_password(user_id: int, body: PasswordIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
     ctx.require_manager()
     u = db.get(User, user_id) or _raise_user()
+    if u.id != ctx.user.id:
+        _guard_top(ctx, u.role)
     validate_password_strength(body.password)
     u.password_hash = hash_password(body.password)
     for rt in db.scalars(select(RefreshToken).where(RefreshToken.user_id == u.id,

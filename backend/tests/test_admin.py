@@ -84,3 +84,65 @@ def test_everyone_can_change_their_own_language(users):
     u = users["worker1"]
     assert u.patch("/auth/me", {"lang": "ru"}).json()["lang"] == "ru"
     assert u.patch("/auth/me", {"lang": "uz"}).json()["lang"] == "uz"
+
+
+# ------------------------------------------------- assistant hisoblari: faqat boshliq
+def test_only_the_boss_manages_assistant_accounts(boss, users, world):
+    """Talab: boshliqning yagona ustunligi — assistant hisoblarini CRUD qilish.
+    Assistant esa o'ziga teng hisob ocha olmaydi."""
+    a = users["assistant"]
+    r = a.post("/users", json={"full_name": "Yashirin assistant", "login": "asst_x",
+                               "password": "1234", "role": "assistant"})
+    assert r.status_code == 403, r.text
+    assert r.json()["code"] == "BOSS_ONLY", r.text
+
+    # boshliq esa ocha oladi
+    r = boss.post("/users", json={"full_name": "Ikkinchi assistant", "login": "asst2",
+                                  "password": "1234", "role": "assistant"})
+    assert r.status_code == 201, r.text
+    new_id = r.json()["id"]
+
+    # assistant boshqa assistantga tegolmaydi: tahrir, parol, blok
+    assert a.patch(f"/users/{new_id}", {"full_name": "Boshqa ism"}).status_code == 403
+    assert a.post(f"/users/{new_id}/password", {"password": "5678"}).status_code == 403
+    assert a.post(f"/users/{new_id}/block").status_code == 403
+
+    # boshliq hammasini qila oladi
+    assert boss.patch(f"/users/{new_id}", {"full_name": "Ikkinchi assistant A."}).status_code == 200
+    assert boss.post(f"/users/{new_id}/password", {"password": "5678"}).status_code == 200
+    assert boss.post(f"/users/{new_id}/block").status_code == 200
+    assert boss.post(f"/users/{new_id}/unblock").status_code == 200
+
+
+def test_assistant_cannot_touch_the_boss(boss, users):
+    a = users["assistant"]
+    assert a.post(f"/users/{boss.id}/block").status_code == 403
+    assert a.patch(f"/users/{boss.id}", {"full_name": "Yangi boshliq"}).status_code == 403
+    assert a.post(f"/users/{boss.id}/password", {"password": "1234"}).status_code == 403
+
+
+def test_assistant_cannot_promote_anyone_to_the_top(users, world):
+    """Ijrochini assistantga ko'tarish ham tepa qatlamga tegish — faqat boshliqda."""
+    a = users["assistant"]
+    worker = world["users"]["worker1"]["id"]
+    assert a.patch(f"/users/{worker}", {"role": "assistant"}).status_code == 403
+    assert a.patch(f"/users/{worker}", {"role": "boss"}).status_code == 403
+
+
+def test_assistant_still_manages_everyone_below(boss, users, world):
+    """Pastdagi xodimlar kesimida boss va assistant teng — bu buzilmasligi kerak."""
+    a = users["assistant"]
+    r = a.post("/users", json={"full_name": "Yangi ijrochi", "login": "ij_new",
+                               "password": "1234", "role": "ijrochi"})
+    assert r.status_code == 201, r.text
+    uid = r.json()["id"]
+    assert a.patch(f"/users/{uid}", {"position": "Ta'minotchi"}).status_code == 200
+    assert a.post(f"/users/{uid}/password", {"password": "4321"}).status_code == 200
+    assert a.post(f"/users/{uid}/block").status_code == 200
+
+
+def test_assistant_can_still_edit_own_profile(users):
+    a = users["assistant"]
+    assert a.patch("/auth/me", {"full_name": "Assistant Aliyev"}).status_code == 200
+    assert a.patch(f"/users/{a.id}", {"lang": "ru"}).status_code == 200
+    assert a.patch(f"/users/{a.id}", {"lang": "uz"}).status_code == 200

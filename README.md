@@ -90,6 +90,12 @@ bitta asosiy bo'lim (~50 ijrochi, to'g'ridan-to'g'ri boshliqqa qaraydi).
 Boshliq va assistant bir-biriga ham vazifa bera oladi. Bo'lim boshlig'i va ijrochi huquqda
 bir xil; ikki xil rol — chunki administratsiyada va hisobotda alohida ro'yxat bo'lib chiqadi.
 
+**Boshliqning yagona ustunligi:** *assistant hisoblarini faqat u boshqaradi* — ochadi,
+tahrirlaydi, parolini almashtiradi, bloklaydi. Assistant na yangi assistant ocha oladi,
+na boshliqqa tegadi, na birovni assistantlikka ko'tara oladi. Pastdagi hamma xodim
+kesimida esa ikkalasi to'liq teng. Server har so'rovda tekshiradi (`BOSS_ONLY`),
+web'da «Assistantlar» oynasi assistantga umuman ko'rinmaydi.
+
 **Rol ≠ lavozim.** Rol faqat "qaysi tugmani bosa oladi"ni belgilaydi — to'rtta va ko'paymaydi.
 Lavozim (Buxgalter, Ta'minotchi…) — erkin matn, huquq bermaydi: hisobotda, filtrda va ovozli
 vazifada odamni topishda ishlatiladi.
@@ -173,7 +179,7 @@ Ism topilmasa taxmin qilinmaydi — tugma bo'lib chiqadi.
 | Bosh sahifa | boshliq, assistant | Kechikkan · Tekshiruvda · Bugun tugaydi · Ochiq · Foiz |
 | Vazifalar | boshliq, assistant | Ro'yxat, filtr (odam, bo'lim, holat), qidiruv, kartochka |
 | Hisobot | boshliq, assistant | Hafta/oy/yil, foiz, odam kesimi, Excel va CSV |
-| Administratsiya | boshliq, assistant | **Bo'limlar** va **Asosiy bo'lim xodimlari** — ikki alohida oyna |
+| Administratsiya | boshliq, assistant | **Bo'limlar**, **Asosiy bo'lim xodimlari**, **Assistantlar** (oxirgisi faqat boshliqqa) |
 | Vazifalarim | boshliq (bo'lim), ijrochi | Faqat o'z vazifalari, dalil bilan topshirish |
 | Sozlamalar | hammaga | Profil, parol, Telegram, eslatma soatlari |
 
