@@ -233,6 +233,9 @@ def _set_active(db: Session, ctx: Ctx, u: User, active: bool):
         for rt in db.scalars(select(RefreshToken).where(RefreshToken.user_id == u.id,
                                                         RefreshToken.revoked.is_(False))):
             rt.revoked = True
+        # botdagi xotira ham darhol tozalansin - bloklangan odam bot orqali ish qilmasin
+        from .misc import revoke_bot_cache
+        revoke_bot_cache(db, u.id, u.telegram_user_id)
     u.is_active = active
 
 

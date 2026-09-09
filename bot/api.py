@@ -56,6 +56,10 @@ class Api:
         """Bitta tokenga bitta ishlaydigan bot — ijozatni API beradi."""
         return await self._req("POST", "/telegram/bot-lease", json={"instance_id": instance_id})
 
+    async def link_revocations(self) -> list:
+        """Web'da «Uzish» bosilgan (yoki odam bloklangan) telegram id'lar."""
+        return await self._req("GET", "/telegram/link-revocations")
+
     async def outbox(self, limit: int = 50) -> list:
         return await self._req("GET", "/telegram/outbox", params={"limit": limit})
 

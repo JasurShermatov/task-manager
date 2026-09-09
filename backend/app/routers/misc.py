@@ -44,12 +44,42 @@ def link_code(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
                        deep_link=f"https://t.me/{bot}?start={code}" if bot else None)
 
 
+# Bot foydalanuvchini har xabarda API'dan so'ramaydi - javob bir necha daqiqa saqlanadi,
+# aks holda har tugma bosishda so'rov ketib, bot sezilarli sekinlashadi. Lekin *uzish*
+# darhol ishlashi kerak: web'da «Uzish» bosilgan zahoti bot uni tanimay qolsin.
+# Shuning uchun uzish shu yerda "bekor qilish" yozuvi bo'lib qoladi, bot esa uni
+# navbat bilan birga (har 3 soniyada) o'qib, o'z xotirasini tozalaydi.
+REVOKE = "revoke"
+
+
+def revoke_bot_cache(db: Session, user_id: int, tg_id: Optional[int]):
+    if tg_id:
+        db.add(Notification(user_id=user_id, event="telegram_unlinked", channel=REVOKE,
+                            status="pending", payload_json={"telegram_user_id": tg_id}))
+
+
 @router.delete("/telegram/unlink")
 def unlink(ctx: Ctx = Depends(get_ctx), db: Session = Depends(get_db)):
+    revoke_bot_cache(db, ctx.user.id, ctx.user.telegram_user_id)
     ctx.user.telegram_user_id = None
     ctx.user.telegram_linked_at = None
     db.commit()
     return {"ok": True}
+
+
+@router.get("/telegram/link-revocations", dependencies=[Depends(get_service)])
+def link_revocations(db: Session = Depends(get_db)):
+    """Bot buni navbat bilan birga o'qiydi va o'sha odamlarni xotirasidan o'chiradi."""
+    rows = db.scalars(select(Notification).where(
+        Notification.channel == REVOKE, Notification.status == "pending").limit(200)).all()
+    out = []
+    for n in rows:
+        tg = (n.payload_json or {}).get("telegram_user_id")
+        if tg:
+            out.append(int(tg))
+        n.status, n.sent_at = "sent", clock.now()
+    db.commit()
+    return out
 
 
 # ---------- telegram (bot / xizmat tomoni) ----------
