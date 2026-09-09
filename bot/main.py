@@ -18,7 +18,7 @@ from typing import Any, Optional
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramUnauthorizedError
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -879,9 +879,14 @@ async def free_text(msg: Message, state: FSMContext, u: dict | None, lang: str):
 
 # ============ outbox ishchisi ============
 async def outbox_worker(bot: Bot):
+    """API hali ko'tarilmagan bo'lishi mumkin — bunda jim kutamiz, log to'ldirmaymiz."""
+    down = 0
     while True:
         try:
             rows = await api.outbox(limit=40)
+            if down:
+                log.info("API qaytdi, xabarlar yuborilmoqda")
+                down = 0
             sent, failed = [], []
             for n in rows:
                 lang = n.get("lang") or "uz"
@@ -896,30 +901,68 @@ async def outbox_worker(bot: Bot):
                     failed.append(n["id"])
             if sent or failed:
                 await api.outbox_ack(sent, failed)
-        except ApiError as e:
-            log.warning("outbox: %s", e)
-        except Exception:  # noqa: BLE001
-            log.exception("outbox")
-        await asyncio.sleep(settings.OUTBOX_INTERVAL)
+        except Exception as e:  # noqa: BLE001
+            down += 1
+            if down == 1:
+                log.warning("API javob bermayapti (%s) — kutyapman", type(e).__name__)
+        await asyncio.sleep(settings.OUTBOX_INTERVAL * (5 if down else 1))
+
+
+TOKEN_HELP = """
+========================================================================
+BOT TOKENI NOTO'G'RI — Telegram "Unauthorized" javob berdi.
+
+Token eskirgan, bekor qilingan yoki .env ga xato ko'chirilgan.
+
+  1) Telegramda @BotFather ni oching
+  2) /mybots -> botingiz -> API Token
+     (kerak bo'lsa "Revoke current token" bilan yangisini oling)
+  3) .env faylidagi BOT_TOKEN= qatoriga o'sha tokenni qo'ying
+     Token ko'rinishi: 1234567890:AAH...  (qo'shtirnoq va bo'sh joysiz)
+  4) docker compose up -d --build bot
+
+Diqqat: .env dagi token bilan bot ishlaydi. Boshqa hech narsa o'zgartirilmaydi.
+========================================================================"""
 
 
 async def main():
+    if not settings.BOT_TOKEN or ":" not in settings.BOT_TOKEN:
+        log.error("BOT_TOKEN .env da yo'q yoki noto'g'ri ko'rinishda.%s", TOKEN_HELP)
+        raise SystemExit(1)
     bot = Bot(settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
     dp.message.middleware(UserMiddleware())
     dp.callback_query.middleware(UserMiddleware())
     dp.include_router(router)
+
+    # Tokenni birinchi bo'lib tekshiramiz: noto'g'ri bo'lsa uzun traceback o'rniga
+    # nima qilish kerakligi yoziladi.
     try:
         me = await bot.get_me()
+    except TelegramUnauthorizedError:
+        log.error("%s", TOKEN_HELP)
+        await bot.session.close()
+        raise SystemExit(1)
+    except Exception as e:  # noqa: BLE001 - tarmoq muammosi: qayta urinib ko'rish mumkin
+        log.error("Telegramga ulanib bo'lmadi: %s", e)
+        await bot.session.close()
+        raise SystemExit(1)
+
+    log.info("bot: @%s (%s)", me.username, me.full_name)
+    try:
         if me.username:
             await api.register_username(me.username)
-            log.info("bot: @%s", me.username)
-    except Exception as e:  # noqa: BLE001
-        log.warning("username ro'yxatdan o'tmadi: %s", e)
+    except Exception as e:  # noqa: BLE001 - API keyinroq ko'tariladi, bot ishlayveradi
+        log.warning("username API ga yozilmadi (%s) — keyin qayta yoziladi", type(e).__name__)
+
     asyncio.create_task(outbox_worker(bot))
     await bot.delete_webhook(drop_pending_updates=False)
+    log.info("bot ishga tushdi")
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        pass

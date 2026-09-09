@@ -10,3 +10,10 @@ uploads/
 *.db-journal
 .DS_Store
 backend/test_uploads/
+
+# IDE va vaqtinchalik
+.idea/
+.vscode/
+Claude outputs/
+_smoke.py
+_v2*.tgz
