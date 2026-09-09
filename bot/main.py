@@ -86,6 +86,12 @@ class UserMiddleware(BaseMiddleware):
         data["u"] = u
         lang = (u or {}).get("lang") or ((tg_user.language_code or "uz")[:2] if tg_user else "uz")
         data["lang"] = lang if lang in T else "uz"
+        # Hisob bog'langan bo'lsa, "kod kiriting" holatida qolib ketmasin. Ilgari shu holat
+        # bir marta o'rnatilsa, odam qaysi tugmani bosmasin javob "6 raqamli kodni yuboring"
+        # bo'lardi - bot uzilib qolgandek ko'rinardi.
+        st = data.get("state")
+        if u is not None and st is not None and await st.get_state() == Link.code.state:
+            await st.clear()
         return await handler(event, data)
 
     @classmethod
@@ -243,7 +249,10 @@ async def start(msg: Message, state: FSMContext, u: dict | None, lang: str,
 
 
 @router.message(Link.code, F.text)
-async def link_code(msg: Message, state: FSMContext, lang: str):
+async def link_code(msg: Message, state: FSMContext, lang: str, u: dict | None = None):
+    if u:   # allaqachon bog'langan - kod so'ramaymiz, menyuni ko'rsatamiz
+        await state.clear()
+        return await menu(msg, u, lang)
     code = (msg.text or "").strip()
     if not re.fullmatch(r"\d{6}", code):
         return await msg.answer(t(lang, "ask_code"))
@@ -532,12 +541,25 @@ async def new_task(msg: Message, state: FSMContext, u: dict | None, lang: str):
     await ask_who(msg, state, u, lang)
 
 
+# Odamlar ro'yxati har bosishda qayta so'ralardi - bu botni sezilarli sekinlashtirardi
+# (ro'yxat bilan birga har bir odamning vazifa hisobi ham sanaladi). Ro'yxat kam
+# o'zgaradi, shuning uchun qisqa vaqtga saqlaymiz.
+_PEOPLE_TTL = 60
+_people_cache: dict[int, tuple[float, list[dict]]] = {}
+
+
 async def _people(u: dict) -> list[dict]:
+    now = asyncio.get_event_loop().time()
+    hit = _people_cache.get(u["id"])
+    if hit and hit[0] > now:
+        return hit[1]
     rows = await api.users(u["id"], active=True, limit=200)
-    return [{"id": x["id"], "name": f"{x['full_name']}"
-             + (f" · {x['department_name']}" if x.get("department_name") else
-                (f" · {x['position']}" if x.get("position") else ""))}
-            for x in rows if x["id"] != u["id"]]
+    items = [{"id": x["id"], "name": f"{x['full_name']}"
+              + (f" · {x['department_name']}" if x.get("department_name") else
+                 (f" · {x['position']}" if x.get("position") else ""))}
+             for x in rows if x["id"] != u["id"]]
+    _people_cache[u["id"]] = (now + _PEOPLE_TTL, items)
+    return items
 
 
 async def ask_who(msg: Message, state: FSMContext, u: dict, lang: str):
@@ -629,6 +651,18 @@ async def nt_pick(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
 @router.callback_query(F.data == "nt:send")
 async def nt_send(cb: CallbackQuery, state: FSMContext, u: dict, lang: str):
     d = await state.get_data()
+    # Yetishmagan maydon bo'lsa, "yuborib bo'lmaydi" deb qo'ymaymiz - o'sha qadamni ochamiz.
+    if not d.get("assignee_id"):
+        await cb.answer(t(lang, "need_assignee"), show_alert=True)
+        return await ask_who(cb.message, state, u, lang)
+    if not d.get("title"):
+        await cb.answer(t(lang, "need_title"), show_alert=True)
+        await state.set_state(NewTask.title)
+        return await cb.message.answer(t(lang, "nt_title"), reply_markup=cancel_kb(lang))
+    if not d.get("due_at"):
+        await cb.answer(t(lang, "need_due"), show_alert=True)
+        await state.set_state(NewTask.due)
+        return await cb.message.answer(t(lang, "nt_due"), reply_markup=due_kb(lang))
     body = {"title": d.get("title"), "assignee_id": d.get("assignee_id"),
             "due_at": d.get("due_at"), "description": d.get("description")}
     try:

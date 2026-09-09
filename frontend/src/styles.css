@@ -568,3 +568,74 @@ textarea.inp { min-height: 80px; resize: vertical; }
   .right-cell { flex-wrap: wrap; }
 }
 .histbox { display: flex; flex-direction: column; }
+
+/* ============================================================================
+   Kimga tanlash — ikki ustun (chapda bo'lim boshliqlari, o'ngda qolganlar)
+   ============================================================================ */
+.picker { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+/* .lbl ichida turadi — sarlavha uslubi (kichik, katta harf, kulrang) ichkariga o'tmasin */
+.lbl > .picker { text-transform: none; letter-spacing: normal; color: var(--text); font-weight: 400; }
+.inp--search { width: 100%; }
+.picker__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.picker__col { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-width: 0;
+  display: flex; flex-direction: column; background: #fff; }
+.picker__h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-2);
+  border-bottom: 1px solid var(--line); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.picker__h .chip { margin-left: auto; }
+.picker__list { max-height: 230px; overflow-y: auto; padding: 4px; display: flex;
+  flex-direction: column; gap: 2px; }
+.pitem { border: 0; background: transparent; text-align: left; border-radius: 6px;
+  padding: 8px 10px; display: block; width: 100%; min-width: 0; }
+.pitem b { display: block; font-size: 14px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.pitem span { display: block; font-family: var(--fm); font-size: 11px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pitem:hover { background: var(--bg-3); }
+.pitem--on, .pitem--on:hover { background: var(--text); color: #fff; }
+.pitem--on span { color: rgba(255,255,255,.72); }
+.empty--sm { padding: 14px 8px; font-size: 12px; }
+
+/* ============================================================================
+   Kattaroq ekran — mayda ko'rinmasin. Mobil o'lchamlar tegilmaydi.
+   ============================================================================ */
+@media (min-width: 1200px) {
+  body { font-size: 15px; }
+  .small { font-size: 13px; }
+  .xs { font-size: 12px; }
+  .app { grid-template-columns: 272px minmax(0, 1fr); }
+  .sitem { padding: 11px 15px; }
+  .sitem b { font-size: 16px; }
+  .sitem span { font-size: 12px; }
+  .side__user { font-size: 14px; }
+  .top { padding: 26px 40px 18px; }
+  .top h1 { font-size: 28px; }
+  .content { padding: 24px 40px 48px; }
+  .inp, .sel { font-size: 15px; min-height: 42px; padding: 10px 14px; }
+  .inp--sm, .sel--sm { min-height: 34px; font-size: 13.5px; padding: 6px 11px; }
+  .lbl { font-size: 12px; }
+  .btn { font-size: 14.5px; min-height: 42px; padding: 10px 16px; }
+  .btn--sm { font-size: 13px; min-height: 32px; padding: 5px 11px; }
+  .tbl th { font-size: 12px; }
+  .tbl td { font-size: 15px; padding: 13px 14px; }
+  .modal { max-width: 780px; }
+  .modal__h b { font-size: 20px; }
+  .modal__b { padding: 22px 26px; gap: 16px; }
+  .modal__f { padding: 14px 26px; }
+  .panel__h b { font-size: 15px; }
+  .mcard h3 { font-size: 17px; }
+  .pitem b { font-size: 15px; }
+  .picker__list { max-height: 280px; }
+}
+
+@media (min-width: 1700px) {
+  body { font-size: 16px; }
+  .content, .top { padding-left: 56px; padding-right: 56px; }
+  .tbl td { font-size: 16px; }
+}
+
+/* telefon: ikki ustun sig'maydi — biri ostiga ikkinchisi */
+@media (max-width: 720px) {
+  .picker__cols { grid-template-columns: 1fr; }
+  .picker__list { max-height: 180px; }
+}

@@ -165,12 +165,12 @@ def confirm_kb(lang: str, d: dict) -> InlineKeyboardMarkup:
             b.row(InlineKeyboardButton(text=f"👤 {c['full_name']}{hint} ({c['score']}%)"[:64],
                                        callback_data=f"nt:pick:{c['id']}"))
         b.row(InlineKeyboardButton(text=t(lang, "other_person"), callback_data="nt:edit:assignee"))
-    row = []
-    if d.get("assignee_id") and d.get("title") and d.get("due_at"):
-        row.append(InlineKeyboardButton(text=t(lang, "c_send"), callback_data="nt:send"))
-    row.append(InlineKeyboardButton(text=t(lang, "c_edit"), callback_data="nt:edit"))
-    row.append(InlineKeyboardButton(text=t(lang, "c_cancel"), callback_data="nt:cancel"))
-    b.row(*row)
+    # «Yuborish» HAR DOIM turadi. Ilgari maydon to'lmasa u umuman chiqmasdi va odam
+    # nima qilishni bilmay qolardi ("faqat Tahrirlash va Bekor bor"). Endi bosiladi va
+    # nima yetishmayotgani aytilib, o'sha qadam ochiladi.
+    b.row(InlineKeyboardButton(text=t(lang, "c_send"), callback_data="nt:send"))
+    b.row(InlineKeyboardButton(text=t(lang, "c_edit"), callback_data="nt:edit"),
+          InlineKeyboardButton(text=t(lang, "c_cancel"), callback_data="nt:cancel"))
     return b.as_markup()
 
 

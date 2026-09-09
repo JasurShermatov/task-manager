@@ -6,6 +6,7 @@ import { useFetch } from '../lib/hooks'
 import { useT } from '../lib/i18n'
 import { useToast } from '../lib/toast'
 import Modal from './Modal'
+import PeoplePicker from './PeoplePicker'
 
 /** Yangi vazifa — uch maydon: kimga, nima, qachon. Qolgani ixtiyoriy. */
 export default function CreateTask({ onClose, defaultAssignee }:
@@ -43,16 +44,10 @@ export default function CreateTask({ onClose, defaultAssignee }:
           <input className="inp" autoFocus value={title} maxLength={250}
                  onChange={e => setTitle(e.target.value)} />
         </label>
-        <label className="lbl">{t('nt_who')} *
-          <select className="sel" value={assignee} onChange={e => setAssignee(e.target.value)}>
-            <option value="">{t('nt_pick')}</option>
-            {options.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.full_name}{p.department_name ? ` · ${p.department_name}` : p.position ? ` · ${p.position}` : ''}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="lbl full">{t('nt_who')} *
+          <PeoplePicker people={options} value={assignee ? Number(assignee) : null}
+                        onPick={id => setAssignee(String(id))} />
+        </div>
         <label className="lbl">{t('nt_due')} *
           <input className="inp" type="datetime-local" value={due} onChange={e => setDue(e.target.value)} />
           <span className="hint">{t('nt_time_hint')}</span>
