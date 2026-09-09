@@ -42,10 +42,9 @@ def _finish(row: dict) -> dict:
     row["avg_late_days"] = round(row.pop("_late_seconds") / 86400 / row["_late_count"], 1) \
         if row["_late_count"] else 0.0
     row.pop("_late_count", None)
-    # Foiz hali muddati kelmagan vazifalarni hisobga olmaydi: aks holda oy o'rtasida
-    # yangi vazifa berilgani odamning ko'rsatkichini pasaytirib yuborardi.
-    decided = row["on_time"] + row["late_done"] + row["not_done"]
-    row["percent"] = round(row["on_time"] / decided * 100, 1) if decided else 0.0
+    # Foiz = vaqtida bajarilgan / berilgan. Oddiy va oldindan aytib bo'ladigan:
+    # vazifa soni o'zgarsa foiz ham o'zgaradi.
+    row["percent"] = round(row["on_time"] / row["given"] * 100, 1) if row["given"] else 0.0
     return row
 
 

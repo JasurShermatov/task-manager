@@ -24,7 +24,7 @@ def free_port():
 
 @pytest.fixture(scope="session")
 def live_api(tmp_path_factory):
-    """Starts the real API on sqlite, seeds a worker user, yields (base_url, admin_access_token)."""
+    """Haqiqiy API'ni sqlite ustida ko'taradi va (base_url, boss tokeni) qaytaradi."""
     import httpx
     port = free_port()
     tmp = tmp_path_factory.mktemp("api")
@@ -34,11 +34,12 @@ def live_api(tmp_path_factory):
            "REDIS_URL": "redis://127.0.0.1:1/0",
            "JWT_SECRET": "bot-test",
            "SERVICE_TOKEN": "dev-service-token",
-           "ADMIN_LOGIN": "admin", "ADMIN_PASSWORD": "admin12345",
+           "ADMIN_LOGIN": "boss", "ADMIN_PASSWORD": "boss12345",
            "UPLOAD_DIR": str(tmp / "uploads"),
            "PYTHONPATH": str(BACKEND)}
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
-                            cwd=str(BACKEND), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
+        cwd=str(BACKEND), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
         try:
@@ -49,20 +50,15 @@ def live_api(tmp_path_factory):
     else:
         out = proc.communicate(timeout=5)[0].decode()
         proc.kill()
-        raise RuntimeError("API did not start:\n" + out)
+        raise RuntimeError("API ko'tarilmadi:\n" + out)
 
-    with httpx.Client(base_url=base, timeout=10) as c:
-        tok = c.post("/auth/login", json={"login": "admin", "password": "admin12345"}).json()["access_token"]
-        h = {"Authorization": f"Bearer {tok}"}
-        roles = {r["code"]: r["id"] for r in c.get("/roles", headers=h).json()}
-        c.post("/users", json={"full_name": "Rustam Ergashev", "login": "ishchi", "password": "parol1234567",
-                               "role_id": roles["bajaruvchi"], "scope_type": "system"}, headers=h)
-
-    os.environ["API_BASE_URL"] = base
     os.environ["SERVICE_TOKEN"] = "dev-service-token"
+    os.environ["API_BASE_URL"] = base
+    with httpx.Client(base_url=base, timeout=10) as c:
+        tok = c.post("/auth/login", json={"login": "boss", "password": "boss12345"}).json()["access_token"]
     yield base, tok
     proc.terminate()
     try:
         proc.wait(timeout=5)
-    except Exception:
+    except subprocess.TimeoutExpired:
         proc.kill()

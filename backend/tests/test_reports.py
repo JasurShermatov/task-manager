@@ -50,18 +50,26 @@ def test_percent_matches_the_example_from_the_brief(boss, users, world):
     assert row["avg_late_days"] > 0, "kechikkanlarda o'rtacha kun ko'rsatilishi kerak"
 
 
-def test_unfinished_tasks_do_not_drag_the_percentage_down(boss, users, world):
-    """Oy o'rtasida berilgan, muddati hali kelmagan vazifa foizni pasaytirmasligi kerak."""
+def test_percent_is_plain_division(boss, users, world):
+    """Foiz = vaqtida / berilgan. Vazifa soni o'zgarsa foiz ham o'zgaradi — oddiy matematika."""
     who = "head1"
-    before = next(r for r in boss.get("/reports/summary").json()["rows"]
-                  if r["user_id"] == world["users"][who]["id"])["percent"]
+
+    def row():
+        return next(r for r in boss.get("/reports/summary").json()["rows"]
+                    if r["user_id"] == world["users"][who]["id"])
+
+    _flow(boss, users, world, who, due=D(4))       # kamida bitta vaqtida bajarilgan bo'lsin
+    before = row()
+    assert before["on_time"] >= 1 and before["percent"] > 0
+
     for _ in range(5):
-        boss.post("/tasks", json={"title": "Muddati kelmagan",
+        boss.post("/tasks", json={"title": "Yangi berilgan",
                                   "assignee_id": world["users"][who]["id"], "due_at": D(20)})
-    after = next(r for r in boss.get("/reports/summary").json()["rows"]
-                 if r["user_id"] == world["users"][who]["id"])
-    assert after["percent"] == before, "hali muddati kelmagan ish foizga ta'sir qilmasligi kerak"
-    assert after["in_progress"] >= 5
+    after = row()
+    assert after["given"] == before["given"] + 5
+    assert after["on_time"] == before["on_time"], "yangi vazifa hali bajarilmagan"
+    assert after["percent"] == round(after["on_time"] / after["given"] * 100, 1)
+    assert after["percent"] < before["percent"], "berilgan ko'paydi, vaqtida o'zgarmadi — foiz tushadi"
 
 
 def test_cancelled_tasks_do_not_count_against_anyone(boss, users, world):
