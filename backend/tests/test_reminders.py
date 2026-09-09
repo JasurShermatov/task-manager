@@ -5,7 +5,7 @@ import pytest
 
 from app import clock
 from app.db import SessionLocal
-from app.models import NEW, PROGRESS, SUBMITTED, Notification, Task, User
+from app.models import MANAGERS, NEW, PROGRESS, SUBMITTED, Notification, Task, User
 from app.services import reminders as rem
 from sqlalchemy import select
 
@@ -81,9 +81,15 @@ def test_engine_is_idempotent(boss, users, world, db):
     r = boss.post("/tasks", json={"title": "Eslatma sinovi", "assignee_id": w,
                                   "due_at": (clock.today() - timedelta(days=1)).isoformat()})
     assert r.status_code == 201, r.text
-    # botga ulanmagan odamga eslatma yozilmaydi - shuning uchun telegram id qo'yamiz
+    # Botga ulanmagan odamga xabar yozilmaydi — shuning uchun ijrochiga ham,
+    # boshqaruvchilarga ham telegram id qo'yamiz.
+    linked = []
     user = db.get(User, w)
     user.telegram_user_id = 555001
+    linked.append(user)
+    for i, m in enumerate(db.scalars(select(User).where(User.role.in_(MANAGERS))), start=2):
+        m.telegram_user_id = 555000 + i
+        linked.append(m)
     db.commit()
 
     ref = clock.at(clock.today(), 17, 5)
@@ -91,12 +97,25 @@ def test_engine_is_idempotent(boss, users, world, db):
     second = rem.run_reminders(db, ref)
     assert first["assignee"] >= 1, first
     assert first["late_alert"] >= 1, "boss va assistantga kechikish xabari borishi kerak"
+    assert first["digest"] >= 1, "kunlik kechikkanlar ro'yxati borishi kerak"
     assert second == {"assignee": 0, "late_alert": 0, "digest": 0}, "takroriy xabar yozildi"
 
     events = [n.event for n in db.scalars(select(Notification).where(Notification.task_id == r.json()["id"]))]
     assert "reminder" in events and "overdue_alert" in events
-    user.telegram_user_id = None
+    for u in linked:
+        u.telegram_user_id = None
     db.commit()
+
+
+def test_people_without_telegram_get_no_queued_messages(boss, world, db):
+    """Botga ulanmagan odamga xabar yozilsa, navbatda «failed» bo'lib chiqindi qolardi."""
+    _clear(db)
+    w = world["users"]["worker1"]["id"]
+    boss.post("/tasks", json={"title": "Ulanmagan odam", "assignee_id": w,
+                              "due_at": (clock.today() - timedelta(days=2)).isoformat()})
+    assert all(u.telegram_user_id is None for u in db.scalars(select(User))), "sinov sharti"
+    assert rem.run_reminders(db, clock.at(clock.today(), 17, 5)) == \
+        {"assignee": 0, "late_alert": 0, "digest": 0}
 
 
 def test_no_reminders_at_night(boss, world, db):

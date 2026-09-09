@@ -93,6 +93,8 @@ def run_reminders(db: Session, ref: datetime | None = None) -> dict:
         return made
 
     people = {u.id: u for u in db.scalars(select(User).where(User.is_active.is_(True)))}
+    # Botga ulanmagan odamga xabar yozib o'tirmaymiz — navbatda "failed" bo'lib qolardi.
+    bosses = [m for m in managers(db) if m.telegram_user_id]
     late_tasks: list[Task] = []
 
     for t in open_tasks:
@@ -112,7 +114,7 @@ def run_reminders(db: Session, ref: datetime | None = None) -> dict:
         # --- boss va assistantga: muddatdan +1 soat o'tdi ---
         if overdue and ref - t.due_at >= LATE_ALERT_AFTER:
             payload = task_payload(db, t)
-            for m in managers(db):
+            for m in bosses:
                 if notify(db, m.id, "overdue_alert", t, payload, dedupe_key=_key("late1h", t.id, m.id)):
                     made["late_alert"] += 1
 
@@ -124,7 +126,7 @@ def run_reminders(db: Session, ref: datetime | None = None) -> dict:
                   "late_days": max(0, int((ref - t.due_at).total_seconds()) // 86400)}
                  for t in late_tasks[:20]]
         payload = {"count": len(late_tasks), "items": items, "date": today.isoformat()}
-        for m in managers(db):
+        for m in bosses:
             if notify(db, m.id, "overdue_digest", None, payload, dedupe_key=_key("digest", m.id, today)):
                 made["digest"] += 1
 
@@ -148,6 +150,8 @@ def due_today_digest(db: Session, ref: datetime | None = None) -> int:
                           "due_at": t.due_at.isoformat(timespec="minutes")} for t in rows[:20]]}
     n = 0
     for m in managers(db):
+        if not m.telegram_user_id:
+            continue
         if notify(db, m.id, "due_today", None, payload, dedupe_key=_key("today", m.id, today)):
             n += 1
     db.commit()

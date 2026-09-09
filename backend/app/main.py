@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from .config import settings
 from .db import engine, SessionLocal, Base
@@ -20,8 +20,46 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("api")
 
 
+LEGACY_TABLES = {"projects", "locations", "task_types", "task_templates", "roles",
+                 "task_checklist_items", "task_daily_progress", "task_attachments",
+                 "task_dependencies", "task_recurring_rules", "jobs"}
+REQUIRED_USER_COLUMNS = {"role", "position", "department_id"}
+
+
+def check_schema():
+    """1.0 bazasi ustiga 2.0 ni ko'tarib bo'lmaydi.
+
+    `create_all` faqat yo'q jadvalni yaratadi — mavjud jadvalga ustun qo'shmaydi. Shuning uchun
+    eski baza qolgan bo'lsa, server "column users.department_id does not exist" deb yiqilardi.
+    Bu yerda buni oldindan aniqlab, nima qilish kerakligini aniq aytamiz.
+    """
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    if "users" not in tables:
+        return                      # bo'sh baza — create_all hammasini quradi
+    missing = REQUIRED_USER_COLUMNS - {c["name"] for c in insp.get_columns("users")}
+    legacy = tables & LEGACY_TABLES
+    if not missing and not legacy:
+        return
+    log.error(
+        "\n" + "=" * 72
+        + "\nBAZA ESKI (1.0) — 2.0 ga mos emas."
+        + (f"\n  yetishmayotgan ustunlar: {', '.join(sorted(missing))}" if missing else "")
+        + (f"\n  eski jadvallar: {', '.join(sorted(legacy))}" if legacy else "")
+        + "\n\n2.0 da ma'lumot tuzilmasi butunlay boshqacha (loyiha/joy/ish turi o'rniga"
+        + "\nbo'lim va odam), shuning uchun bazani yangidan qurish kerak:"
+        + "\n\n    docker compose run --rm api python -m app.reset_db --yes"
+        + "\n    docker compose up -d"
+        + "\n\nSinov ma'lumoti bilan to'ldirish:"
+        + "\n    docker compose run --rm api python -m app.fake_data --reset"
+        + "\n\nEski ma'lumot kerak bo'lsa avval zaxira oling:"
+        + "\n    docker compose exec db pg_dump -U saff saff_tasks > saff-1.0-backup.sql"
+        + "\n" + "=" * 72)
+    raise SystemExit(1)
+
+
 def init_db():
-    """Create tables (Alembic is also shipped; create_all keeps first run zero-config)."""
+    """Jadvallarni yaratadi (Alembic ham bor; create_all birinchi ishga tushishni soddalashtiradi)."""
     for attempt in range(30):
         try:
             with engine.connect() as c:
@@ -30,6 +68,7 @@ def init_db():
         except Exception as e:  # pragma: no cover
             log.warning("DB not ready (%s), retry %d", e.__class__.__name__, attempt)
             time.sleep(2)
+    check_schema()
     Base.metadata.create_all(engine)
     if engine.dialect.name == "postgresql":
         with engine.begin() as c:
