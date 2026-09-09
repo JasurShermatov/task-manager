@@ -38,6 +38,11 @@ from render import (cancel_kb, confirm_card, confirm_kb, due_kb, edit_block_kb, 
                     report_kb, task_block, task_card, task_kb)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# httpx har so'rovni INFO bilan yozadi. Navbat ishchisi har 3 soniyada ikki marta
+# so'raydi - bu kuniga ~50 000 qator, ya'ni bir necha oyda disk to'ladi. Faqat
+# xatolarini ko'rsatamiz; kerakli narsalarni o'zimiz yozamiz.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
 router = Router()
