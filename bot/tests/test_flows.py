@@ -473,3 +473,43 @@ async def test_managers_submit_to_each_other_without_proof(world):
     assert t("uz", "sb_need_file") not in s2.texts, "dalil so'ralmasligi kerak"
     assert tk["code"] in " ".join(s2.texts)
     assert (await api.task(a_u["id"], tk["id"]))["status"] == "submitted"
+
+
+# ---------------------------------------------------------------- web'dan uzish
+@pytest.mark.asyncio
+async def test_unlinking_from_the_web_takes_effect_at_once(world, live_api):
+    """Talab: bot faqat web'da «Uzish» bosilganda uzilsin — va o'shanda DARHOL uzilsin.
+
+    Bot foydalanuvchini har xabarda so'ramaydi (tezlik uchun saqlab turadi), shuning uchun
+    uzish alohida xabar bilan yetkaziladi: bot navbatni o'qiyotganda xotirasini tozalaydi.
+    """
+    import httpx
+    from api import api
+    base, _ = live_api
+    tg = world["tg"]["worker1"]
+
+    assert await resolve(tg), "sinov sharti: ulangan bo'lishi kerak"
+    await api.link_revocations()          # eski yozuvlarni bo'shatamiz
+
+    with httpx.Client(base_url=base, timeout=20) as c:
+        tok = c.post("/auth/login", json={"login": "worker1", "password": "1234"}).json()["access_token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        assert c.delete("/telegram/unlink", headers=h).status_code == 200
+
+        assert tg in await api.link_revocations(), "uzish boti ga yetkazilmadi"
+        assert await api.link_revocations() == [], "bir marta o'qilishi kerak"
+
+        # bot endi tanimaydi va kod so'raydi
+        bot.UserMiddleware.cache[tg] = (float("inf"), {"id": 1})   # eski holat saqlanib turgan bo'lsin
+        bot.UserMiddleware.invalidate(tg)                          # navbat ishchisi shuni qiladi
+        assert await api.user_by_tg(tg) is None
+
+        s = Sent()
+        await bot.my_tasks(FakeMsg(s, tg), None, "uz")
+        assert s.last == t("uz", "not_linked")
+
+        # qaytadan bog'lasa - yana ishlaydi
+        code = c.post("/telegram/link-code", headers=h).json()["code"]
+        c.post("/telegram/consume-code", json={"code": code, "telegram_user_id": tg},
+               headers={"X-Service-Token": os.environ["SERVICE_TOKEN"]})
+    assert await resolve(tg), "qayta bog'langach ishlashi kerak"

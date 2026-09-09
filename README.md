@@ -185,9 +185,16 @@ degan xabarlarni ko'radi — go'yo bot uzilib qolgandek. Shuning uchun ijozat (l
 saqlanadi: birinchi ishga tushgani ishlaydi, ikkinchisi jim kutadi va birinchisi to'xtagan
 zahoti **o'zi** ishga tushadi. Hech narsa qo'lda qilinmaydi.
 
-**Bog'lanish uzilmaydi.** API qayta ko'tarilayotganda bot «hisobingizni bog'lang» demaydi —
-oxirgi ma'lum holatni ishlatadi va «biroz kuting» deydi. Bog'lanish faqat odam o'zi
-*Sozlamalar → Telegram → Uzish* qilganda uziladi.
+**Bog'lanish faqat bitta yo'l bilan uziladi:** web'da *Sozlamalar → Telegram → Uzish*.
+Boshqa hech qanday holatda bot kod so'ramaydi — API qayta ko'tarilayotgan bo'lsa ham
+(unda oxirgi ma'lum holat ishlatiladi va «biroz kuting» deyiladi).
+
+Buning ostidagi mexanizm: bot foydalanuvchini har xabarda so'ramaydi, javobni bir necha
+daqiqa saqlaydi — aks holda har tugma bosishda so'rov ketib, bot sezilarli sekinlashadi.
+Lekin uzish **darhol** ishlashi kerak, shuning uchun «Uzish» bazada bitta yozuv qoldiradi;
+bot xabarlar navbatini o'qiyotganda (har 3 soniyada) uni ham o'qiydi va o'sha odamni
+xotirasidan o'chiradi. Odam bloklanganda ham xuddi shunday — lekin blok bog'lanishni
+uzmaydi: blokdan chiqsa bot yana ishlaydi.
 
 **Ovozli vazifa** (`OPENAI_API_KEY` bo'lsa): gapirasiz → bot kartochka chiqaradi → «Yuborish».
 Xato bo'lsa «Tahrirlash» — vazifa oddiy matn bo'lib chiqadi, nusxa olib tuzatasiz va qaytarasiz.

@@ -146,3 +146,49 @@ def test_assistant_can_still_edit_own_profile(users):
     assert a.patch("/auth/me", {"full_name": "Assistant Aliyev"}).status_code == 200
     assert a.patch(f"/users/{a.id}", {"lang": "ru"}).status_code == 200
     assert a.patch(f"/users/{a.id}", {"lang": "uz"}).status_code == 200
+
+
+# ------------------------------------------------- bot bilan bog'lanish
+def test_unlinking_tells_the_bot_at_once(client, boss, users, world):
+    """Bot foydalanuvchini bir necha daqiqa saqlab turadi (tezlik uchun). Shuning uchun
+    web'dagi «Uzish» alohida xabar qoldiradi — bot uni o'qib xotirasini tozalaydi.
+    Bo'lmasa odam uzganini o'ylaydi, bot esa ishlab turaveradi."""
+    H = {"X-Service-Token": "test-service"}
+    client.get("/telegram/link-revocations", headers=H)     # eskisini bo'shatamiz
+
+    w = users["worker1"]
+    code = w.post("/telegram/link-code").json()["code"]
+    tg = 770001
+    assert client.post("/telegram/consume-code", json={"code": code, "telegram_user_id": tg},
+                       headers=H).status_code == 200
+    assert client.get(f"/telegram/user-by-tg/{tg}", headers=H).status_code == 200
+
+    assert w.delete("/telegram/unlink").status_code == 200
+    r = client.get("/telegram/link-revocations", headers=H)
+    assert r.status_code == 200 and tg in r.json(), r.text
+    assert client.get("/telegram/link-revocations", headers=H).json() == [], "bir marta o'qiladi"
+    assert client.get(f"/telegram/user-by-tg/{tg}", headers=H).status_code == 404
+
+
+def test_blocking_a_person_also_cuts_their_bot(client, boss, world):
+    """Bloklangan odam bot orqali ishlashda davom etmasin."""
+    H = {"X-Service-Token": "test-service"}
+    client.get("/telegram/link-revocations", headers=H)
+    r = boss.post("/users", json={"full_name": "Bloklanadigan", "login": "blk1",
+                                  "password": "1234", "role": "ijrochi"})
+    uid = r.json()["id"]
+    tok = client.post("/auth/login", json={"login": "blk1", "password": "1234"}).json()["access_token"]
+    code = client.post("/telegram/link-code", headers={"Authorization": f"Bearer {tok}"}).json()["code"]
+    tg = 770002
+    client.post("/telegram/consume-code", json={"code": code, "telegram_user_id": tg}, headers=H)
+
+    assert boss.post(f"/users/{uid}/block").status_code == 200
+    assert tg in client.get("/telegram/link-revocations", headers=H).json()
+    assert client.get(f"/telegram/user-by-tg/{tg}", headers=H).status_code == 404
+
+    # blok bog'lanishni uzmaydi — blokdan chiqsa bot yana ishlaydi
+    assert boss.post(f"/users/{uid}/unblock").status_code == 200
+    assert client.get(f"/telegram/user-by-tg/{tg}", headers=H).status_code == 200
+    tok2 = client.post("/auth/login", json={"login": "blk1", "password": "1234"}).json()["access_token"]
+    client.delete("/telegram/unlink", headers={"Authorization": f"Bearer {tok2}"})
+    client.get("/telegram/link-revocations", headers=H)

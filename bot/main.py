@@ -974,6 +974,17 @@ async def outbox_worker(bot: Bot):
     """API hali ko'tarilmagan bo'lishi mumkin — bunda jim kutamiz, log to'ldirmaymiz."""
     down = 0
     while True:
+        # Web'da «Uzish» bosilgan bo'lsa - xotirani darhol tozalaymiz. Bo'lmasa
+        # foydalanuvchi uzganini o'ylab turadi, bot esa saqlangan holat bilan yana
+        # bir necha daqiqa ishlab turaverardi. Alohida try: bu yerdagi xato
+        # xabarlar navbatini to'xtatib qo'ymasin.
+        try:
+            for tg in await api.link_revocations():
+                UserMiddleware.invalidate(int(tg))
+                _people_cache.pop(int(tg), None)
+                log.info("bog'lanish uzildi: %s", tg)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             rows = await api.outbox(limit=40)
             if down:
