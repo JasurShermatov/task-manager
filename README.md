@@ -48,6 +48,16 @@ docker compose up -d --build
 50 asosiy bo'lim xodimi), uch oylik tarix bilan ~360 vazifa — vaqtida bajarilgani, kechikkani,
 bajarilmagani va qaytarilgani aralash, hisobot darhol ko'rinsin uchun. Oxirida o'zini tekshiradi.
 
+### Parol esdan chiqsa yoki kirib bo'lmasa
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm api python -m app.set_password --list
+docker compose -f docker-compose.prod.yml run --rm api python -m app.set_password axmad Yangi-2026
+```
+
+Parolni qo'yadi, eski sessiyalarni yopadi, qulfni ochadi va o'sha parol bilan
+tekshirib ko'radi. Web ishlamay qolsa ham ishlaydi.
+
 ### Ishga tushmasa
 
 | Belgi | Sabab va yechim |
@@ -71,6 +81,8 @@ bajarilmagani va qaytarilgani aralash, hisobot darhol ko'rinsin uchun. Oxirida o
 | `PUBLIC_API_URL` | Fayl havolalari shu manzil bilan imzolanadi |
 | `OPENAI_API_KEY` | **Ixtiyoriy.** Ovozli vazifa uchun. Bo'lmasa qolgani ishlayveradi |
 | `MIN_PASSWORD_LEN` | Parol uzunligi (default 4 — ichki tizim; himoya: 5 xatodan keyin 15 daqiqa qulf) |
+| `ACCESS_TTL_MIN` | Kirish tokeni (default 15 daqiqa; eskirsa jimgina yangilanadi) |
+| `REFRESH_TTL_DAYS` | Shuncha kun qayta login so'ralmaydi (default 15) |
 | `TZ_NAME` | Muddat va hisobot vaqti (default `Asia/Tashkent`) |
 
 ---
@@ -249,7 +261,13 @@ esa harf va bo'sh joylar tekislanadi — telefon birinchi harfni kattalashtirib 
 ham odam kira oladi.
 
 **Parol almashtirish:** xodim kartochkasida yangi parolni yozib «Saqlash» bosilsa
-yetadi — yonidagi kichik tugma ham ishlaydi, lekin majburiy emas.
+yetadi — yonidagi kichik tugma ham ishlaydi, lekin majburiy emas. Yangi parol qo'yilgan
+zahoti eski urinishlar uchun qo'yilgan **qulf ham ochiladi** — aks holda odam to'g'ri
+parol bilan ham 15 daqiqa kira olmasdi.
+
+**Himoya:** bitta login+IP bo'yicha 5 xato urinishdan keyin 15 daqiqa qulf. Bu hisob
+Redis'da turadi, lekin **kirishning sharti emas** — Redis yiqilsa ham odamlar tizimga
+kiraveradi. Parol `bcrypt` bilan saqlanadi, hech qayerda ochiq yozilmaydi.
 
 Ruxsat **har so'rovda serverda** tekshiriladi — manzilni qo'lda yozib kirishga ham yo'l yopiq.
 

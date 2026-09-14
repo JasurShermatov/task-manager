@@ -23,6 +23,8 @@ from ..errors import not_found, validation
 from ..models import (
     BOSS, HEAD, MANAGERS, NEW, PROGRESS, SUBMITTED, WORKER, Department, RefreshToken, Task, User,
 )
+from ..redis_client import attempts_clear
+from ..routers.auth import attempt_prefix
 from ..schemas import DepartmentIn, DepartmentOut, PasswordIn, UserIn, UserOut, UserPatch
 from ..services import tasks as svc
 from .. import clock
@@ -198,6 +200,7 @@ def update_user(user_id: int, body: UserPatch, ctx: Ctx = Depends(get_ctx), db: 
         login = data["login"].strip().lower()
         if db.scalar(select(User).where(func.lower(User.login) == login, User.id != u.id)):
             raise validation("LOGIN_TAKEN", "Bu login band.", field_errors={"login": "taken"})
+        attempts_clear(attempt_prefix(u.login))    # eski login bo'yicha qulf qolmasin
         u.login = login
     new_role = data.get("role") or u.role
     if "role" in data or "department_id" in data:
@@ -257,6 +260,7 @@ def unblock_user(user_id: int, ctx: Ctx = Depends(get_ctx), db: Session = Depend
     # bloklangan boshliq qaytsa, bo'limi band bo'lib qolgan bo'lishi mumkin
     if u.role == HEAD:
         _check_department(db, HEAD, u.department_id, user_id=u.id)
+    attempts_clear(attempt_prefix(u.login))
     u.is_active = True
     db.commit()
     return UserOut(**svc.user_out(db, u, ctx.user.lang))
@@ -273,6 +277,9 @@ def set_password(user_id: int, body: PasswordIn, ctx: Ctx = Depends(get_ctx), db
     for rt in db.scalars(select(RefreshToken).where(RefreshToken.user_id == u.id,
                                                     RefreshToken.revoked.is_(False))):
         rt.revoked = True
+    # Yangi parol qo'yildi — eski urinishlar uchun qo'yilgan qulf ham ketsin.
+    # Aks holda odam to'g'ri parol bilan ham 15 daqiqa kira olmaydi.
+    attempts_clear(attempt_prefix(u.login))
     db.commit()
     return {"ok": True}
 

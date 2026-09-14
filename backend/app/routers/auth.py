@@ -9,15 +9,19 @@ from ..config import settings
 from ..db import get_db
 from ..errors import ApiError, unauthorized
 from ..models import RefreshToken, User
-from ..redis_client import rds
+from ..redis_client import attempts, attempts_bump, attempts_clear
 from ..schemas import LoginIn, MeIn, RefreshIn, TokenOut, UserOut
 from ..services import tasks as svc
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def attempt_prefix(login: str) -> str:
+    return f"login_attempts:{(login or '').strip().lower()}:"
+
+
 def _attempt_key(login: str, ip: str) -> str:
-    return f"login_attempts:{login.lower()}:{ip}"
+    return attempt_prefix(login) + ip
 
 
 def _token_out(db: Session, user: User) -> TokenOut:
@@ -38,14 +42,14 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     ip = request.client.host if request.client else "?"
     login_norm = (body.login or "").strip().lower()
     key = _attempt_key(login_norm, ip)
-    attempts = int(rds.get(key) or 0)
-    if attempts >= 5:
+    n = attempts(key)
+    if n >= 5:
         raise ApiError(429, "TOO_MANY_ATTEMPTS", "Ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring.")
     user = db.scalar(select(User).where(func.lower(User.login) == login_norm))
     if not user or not user.is_active or not verify_password(body.password, user.password_hash):
-        rds.set(key, attempts + 1, ex=900)
+        attempts_bump(key, n + 1)
         raise unauthorized("Login yoki parol noto'g'ri.")
-    rds.delete(key)
+    attempts_clear(attempt_prefix(login_norm))
     user.last_login_at = datetime.utcnow()
     db.commit()
     return _token_out(db, user)
@@ -91,6 +95,7 @@ def update_me(body: MeIn, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get
     if body.password:
         validate_password_strength(body.password)
         u.password_hash = hash_password(body.password)
+        attempts_clear(attempt_prefix(u.login))
         # parol almashsa eski sessiyalar yopiladi
         for rt in db.scalars(select(RefreshToken).where(RefreshToken.user_id == u.id, RefreshToken.revoked.is_(False))):
             rt.revoked = True
