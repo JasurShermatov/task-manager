@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth import Ctx, get_ctx, hash_password, make_access_token, make_refresh_token, validate_password_strength, verify_password
@@ -28,12 +28,20 @@ def _token_out(db: Session, user: User) -> TokenOut:
 
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
+    """Login KATTA-KICHIK HARFGA qaramaydi va bo'sh joylar kesiladi.
+
+    Administratsiya loginni bazaga kichik harfda saqlaydi. Ilgari bu yerda aniq
+    moslik tekshirilardi, ya'ni "Assistant" deb yozgan odam parol to'g'ri bo'lsa ham
+    kira olmasdi — telefon klaviaturasi birinchi harfni o'zi kattalashtiradi va
+    muammo aynan shundan kelib chiqardi.
+    """
     ip = request.client.host if request.client else "?"
-    key = _attempt_key(body.login, ip)
+    login_norm = (body.login or "").strip().lower()
+    key = _attempt_key(login_norm, ip)
     attempts = int(rds.get(key) or 0)
     if attempts >= 5:
         raise ApiError(429, "TOO_MANY_ATTEMPTS", "Ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring.")
-    user = db.scalar(select(User).where(User.login == body.login))
+    user = db.scalar(select(User).where(func.lower(User.login) == login_norm))
     if not user or not user.is_active or not verify_password(body.password, user.password_hash):
         rds.set(key, attempts + 1, ex=900)
         raise unauthorized("Login yoki parol noto'g'ri.")

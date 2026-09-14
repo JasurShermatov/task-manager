@@ -12,7 +12,7 @@ export default function Login() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setBusy(true); setErr('')
-    try { await login(l.trim(), p) } catch (ex: any) { setErr(ex?.status === 429 ? ex.message : t('login_err')) } finally { setBusy(false) }
+    try { await login(l.trim().toLowerCase(), p) } catch (ex: any) { setErr(ex?.status === 429 ? ex.message : t('login_err')) } finally { setBusy(false) }
   }
   return (
     <div className="login">
