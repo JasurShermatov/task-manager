@@ -69,6 +69,10 @@ class Api:
     async def sign_file(self, file_id: int) -> dict:
         return await self._req("GET", f"/files/{file_id}/sign")
 
+    async def file_bytes(self, file_id: int) -> bytes:
+        """Faylning o'zi — bot uni Telegramga yuboradi (havola orqali emas)."""
+        return await self._req("GET", f"/files/{file_id}/raw")
+
     # ---- foydalanuvchi ----
     async def me(self, uid):
         return await self._req("GET", "/auth/me", uid)

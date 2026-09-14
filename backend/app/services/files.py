@@ -12,7 +12,16 @@ DOC_MIMES = {"application/pdf", "application/msword",
              "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
              "text/plain"}
 AUDIO_MIMES = {"audio/ogg", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/webm", "audio/wav"}
-ALLOWED = IMAGE_MIMES | DOC_MIMES
+# Ilgari faqat shu ro'yxatdagi turlar qabul qilinardi va odam .zip, .pptx, .csv yoki
+# telefon suratini (heic) yuklolmasdi — "bu turdagi fayl qabul qilinmaydi" chiqardi.
+# Endi hammasi qabul qilinadi. Bu xavfsiz, chunki fayl hech qachon brauzerda ochilmaydi:
+# `/files/{id}` uni har doim YUKLAB OLISH sifatida beradi (attachment + nosniff), demak
+# ichidagi HTML yoki skript bajarilmaydi. Chegara — faqat hajm.
+ALLOWED = IMAGE_MIMES | DOC_MIMES     # turini aniqlash uchun (rasmmi, hujjatmi)
+
+
+def is_image(mime: str) -> bool:
+    return (mime or "").startswith("image/") or mime in IMAGE_MIMES
 
 
 def upload_dir() -> str:

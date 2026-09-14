@@ -120,7 +120,12 @@ def task_kb(lang: str, tk: dict) -> InlineKeyboardMarkup | None:
         row.append(InlineKeyboardButton(text=t(lang, "a_return"), callback_data=f"t:ret:{tid}"))
     if row:
         b.row(*row)
-    b.row(InlineKeyboardButton(text=t(lang, "a_comment"), callback_data=f"t:cm:{tid}"))
+    last = [InlineKeyboardButton(text=t(lang, "a_comment"), callback_data=f"t:cm:{tid}")]
+    # Fayl bo'lsa — darhol ochish imkoni. Web'dan yuklangani ham shu yerda chiqadi.
+    n = tk.get("file_count") or tk.get("proof_count") or 0
+    if n:
+        last.append(InlineKeyboardButton(text=t(lang, "a_files", n=n), callback_data=f"t:files:{tid}"))
+    b.row(*last)
     return b.as_markup()
 
 
@@ -300,6 +305,10 @@ def notif_kb(lang: str, event: str, p: dict) -> InlineKeyboardMarkup | None:
     if event == "task_submitted":
         b.row(InlineKeyboardButton(text=t(lang, "a_accept"), callback_data=f"t:acc:{tid}"),
               InlineKeyboardButton(text=t(lang, "a_return"), callback_data=f"t:ret:{tid}"))
+        # Qabul qilishdan oldin dalilni ko'rish kerak — tugma shu yerda tursin.
+        if p.get("proof_count"):
+            b.row(InlineKeyboardButton(text=t(lang, "a_files", n=p["proof_count"]),
+                                       callback_data=f"t:files:{tid}"))
         return b.as_markup()
     if event in ("task_created", "reminder", "task_returned"):
         b.row(InlineKeyboardButton(text=t(lang, "a_submit"), callback_data=f"t:sub:{tid}"),

@@ -425,9 +425,49 @@ async def task_action(cb: CallbackQuery, state: FSMContext, u: dict | None, lang
             await cb.message.answer(t(lang, "cm_ask"), reply_markup=cancel_kb(lang))
         elif action == "sub":
             await begin_submit(cb.message, state, u, lang, tid)
+        elif action == "files":
+            await send_files(cb, u, lang, tid)
     except ApiError as e:
         return await err(cb, lang, e)
     await cb.answer()
+
+
+TG_LIMIT_MB = 45      # Telegram bot orqali yuborish chegarasi (50 MB) dan bir oz pastroq
+FILES_AT_ONCE = 10    # bir bosishda shuncha fayl
+
+
+async def send_files(cb: CallbackQuery, u: dict, lang: str, task_id: int):
+    """Vazifaga biriktirilgan hamma faylni Telegramga yuboradi.
+
+    Fayl HAVOLA bilan emas, o'zi yuboriladi: bot baytlarni API'dan ichki tarmoq orqali
+    oladi. Shuning uchun domen, imzolangan havola muddati yoki Telegram serveri bizning
+    manzilga chiqa oladimi — bularning hech biri ahamiyatga ega emas. Web'dan yuklangan
+    hujjat ham, botdan yuborilgan rasm ham bir xil ochiladi.
+    """
+    tk = await api.task(u["id"], task_id)
+    files = [f for f in (tk.get("files") or [])]
+    if not files:
+        return await cb.answer(t(lang, "files_none"), show_alert=True)
+    await cb.answer(t(lang, "files_sending", n=len(files)))
+    for f in files[:FILES_AT_ONCE]:
+        size_mb = (f.get("size") or 0) / 1024 / 1024
+        caption = f"{tk['code']} · {f['filename']}"
+        if size_mb > TG_LIMIT_MB:
+            await cb.message.answer(t(lang, "file_too_big", name=f["filename"],
+                                      mb=round(size_mb)))
+            continue
+        try:
+            data = await api.file_bytes(f["id"])
+            doc = BufferedInputFile(data, filename=f["filename"])
+            if (f.get("mime_type") or "").startswith("image/"):
+                await cb.message.answer_photo(doc, caption=caption)
+            else:
+                await cb.message.answer_document(doc, caption=caption)
+        except Exception as e:  # noqa: BLE001 - bitta fayl qolganini to'xtatmasin
+            log.warning("fayl yuborilmadi %s: %s", f.get("id"), e)
+            await cb.message.answer(t(lang, "file_failed", name=f["filename"]))
+    if len(files) > FILES_AT_ONCE:
+        await cb.message.answer(t(lang, "files_more", n=len(files) - FILES_AT_ONCE))
 
 
 @router.message(Ret.reason, F.text)

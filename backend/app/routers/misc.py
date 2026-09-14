@@ -218,6 +218,18 @@ def mark_read(body: dict, ctx: Ctx = Depends(get_ctx), db: Session = Depends(get
 
 
 # ---------- fayllar (imzolangan havola) ----------
+def _serve(row: TaskFile) -> FileResponse:
+    """Fayl HAR DOIM yuklab olish sifatida beriladi.
+
+    `filename` berilgani uchun Starlette `Content-Disposition: attachment` qo'yadi, ustiga
+    `nosniff` qo'shamiz. Shu sabab har qanday turdagi faylni saqlash xavfsiz: brauzer uni
+    ochib, ichidagi HTML yoki skriptni bajarmaydi.
+    """
+    return FileResponse(fsvc.abs_path(row.storage_key), media_type=row.mime_type,
+                        filename=row.filename,
+                        headers={"X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/files/{file_id}")
 def get_file(file_id: int, exp: int, sig: str, db: Session = Depends(get_db)):
     if not fsvc.verify_sig(file_id, exp, sig):
@@ -225,7 +237,21 @@ def get_file(file_id: int, exp: int, sig: str, db: Session = Depends(get_db)):
     row = db.get(TaskFile, file_id)
     if not row or not row.is_active:
         raise not_found("Fayl")
-    return FileResponse(fsvc.abs_path(row.storage_key), media_type=row.mime_type, filename=row.filename)
+    return _serve(row)
+
+
+@router.get("/files/{file_id}/raw", dependencies=[Depends(get_service)])
+def raw_file(file_id: int, db: Session = Depends(get_db)):
+    """Bot faylni shu yerdan oladi va Telegramga o'zi yuboradi.
+
+    Imzolangan havolani Telegramga berish ham mumkin edi, lekin unda fayl ko'rinishi
+    tashqi manzil, domen va havola muddatiga bog'lanib qolardi. Bot API bilan ichki
+    tarmoqda gaplashadi — shuning uchun bu yo'l har doim ishlaydi.
+    """
+    row = db.get(TaskFile, file_id)
+    if not row or not row.is_active:
+        raise not_found("Fayl")
+    return _serve(row)
 
 
 @router.get("/files/{file_id}/sign", dependencies=[Depends(get_service)])

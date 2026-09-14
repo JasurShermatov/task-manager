@@ -82,6 +82,12 @@ class FakeMsg:
         self.sink.markups.append(None)
         return self
 
+    async def answer_photo(self, photo, caption=None, **kw):
+        self.sink.docs.append(photo)
+        self.sink.texts.append(caption or "")
+        self.sink.markups.append(None)
+        return self
+
     async def edit_text(self, text, reply_markup=None, **kw):
         self.sink.texts.append(text)
         self.sink.markups.append(reply_markup)
@@ -513,3 +519,53 @@ async def test_unlinking_from_the_web_takes_effect_at_once(world, live_api):
         c.post("/telegram/consume-code", json={"code": code, "telegram_user_id": tg},
                headers={"X-Service-Token": os.environ["SERVICE_TOKEN"]})
     assert await resolve(tg), "qayta bog'langach ishlashi kerak"
+
+
+# ---------------------------------------------------------------- fayllar
+@pytest.mark.asyncio
+async def test_files_from_the_web_open_in_the_bot(world, live_api):
+    """Web'dan yuklangan hujjat botda ochilmasdi — na havola, na tugma bor edi.
+    Endi kartochkada «Fayllar» tugmasi chiqadi va fayl o'zi yuboriladi."""
+    import httpx
+    from api import api
+    base, tok = live_api
+    boss_tg = world["tg"]["boss"]
+    boss_u = await resolve(boss_tg)
+
+    tk = await api.create_task(boss_u["id"], {"title": "Hujjatli vazifa",
+                                              "assignee_id": world["users"]["worker1"]["id"],
+                                              "due_at": D(2)})
+    with httpx.Client(base_url=base, timeout=20) as c:
+        r = c.post(f"/tasks/{tk['id']}/files",
+                   headers={"Authorization": f"Bearer {tok}"},
+                   files={"file": ("shartnoma.pdf", b"%PDF-1.4 test", "application/pdf")},
+                   data={"kind": "task"})
+        assert r.status_code == 201, r.text
+
+    fresh = await api.task(boss_u["id"], tk["id"])
+    assert fresh["file_count"] == 1
+    kb = render.task_kb("uz", fresh)
+    data = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert f"t:files:{tk['id']}" in data, "«Fayllar» tugmasi chiqmadi"
+
+    s = Sent()
+    cb = FakeCb(s, f"t:files:{tk['id']}", boss_tg)
+    await bot.task_action(cb, ctx_factory()(boss_tg), boss_u, "uz")
+    assert s.docs, "fayl yuborilmadi"
+    assert s.docs[0].filename == "shartnoma.pdf"
+    assert "shartnoma.pdf" in " ".join(s.texts)
+
+
+@pytest.mark.asyncio
+async def test_a_task_without_files_says_so(world):
+    from api import api
+    boss_tg = world["tg"]["boss"]
+    boss_u = await resolve(boss_tg)
+    tk = await api.create_task(boss_u["id"], {"title": "Faylsiz vazifa",
+                                              "assignee_id": world["users"]["worker1"]["id"],
+                                              "due_at": D(2)})
+    s = Sent()
+    cb = FakeCb(s, f"t:files:{tk['id']}", boss_tg)
+    await bot.task_action(cb, ctx_factory()(boss_tg), boss_u, "uz")
+    assert cb.alerts and cb.alerts[0] == t("uz", "files_none")
+    assert not s.docs

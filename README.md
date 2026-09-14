@@ -117,6 +117,9 @@ Yangi ──▶ Boshladim ──▶ Topshirdim ──▶ Qabul qilindi
   └──▶ Bekor            └──▶ Qayta qil (sabab majburiy) ──▶ Boshladim
 ```
 
+- **Har qanday turdagi fayl yuklanadi** (rasm, PDF, Word, Excel, zip, csv…). Tur bo'yicha
+  cheklov yo'q — chegara faqat hajm: rasm 20 MB, qolgani 50 MB. Fayl har doim *yuklab
+  olish* sifatida beriladi, shuning uchun ichidagi narsa brauzerda bajarilmaydi.
 - **Topshirishda dalil majburiy** — kamida bitta rasm yoki fayl.
   *Istisno:* boshliq bilan assistant **bir-biriga** bergan vazifada dalil shart emas —
   ular ko'pincha bir-biriga savol beradi («shartnoma qanday bo'ldi?»), bunday ishning
@@ -176,8 +179,14 @@ tugma yo'qolib qolmaydi — bosilganda nima yetishmayotgani aytiladi va o'sha qa
 **Topshirish uch qadam:** vazifani tanlash → nima qilindi → rasm/fayl → «Tayyor».
 Dalilsiz yuborib bo'lmaydi.
 
-**Xabarning o'zida tugmalar:** kimdir topshirsa, boshliqqa rasm bilan xabar keladi va o'sha
-xabarda «✅ Qabul qildim / ↩️ Qayta qil» turadi — ro'yxat ochish shart emas.
+**Xabarning o'zida tugmalar:** kimdir topshirsa, boshliqqa xabar keladi va o'sha xabarda
+«✅ Qabul qildim / ↩️ Qayta qil» hamda «📎 Fayllar» turadi — ro'yxat ochish shart emas.
+
+**Fayllar botda ham ochiladi.** Vazifa kartochkasidagi «📎 Fayllar» tugmasi web'dan
+yuklangan hujjatni ham, botdan yuborilgan rasmni ham yuboradi. Fayl havola bilan emas,
+o'zi yuboriladi: bot baytlarni API'dan ichki tarmoq orqali oladi, shuning uchun domen,
+havola muddati yoki Telegram bizning manzilga chiqa oladimi — ahamiyati yo'q.
+45 MB dan katta fayl yuborilmaydi (Telegram chegarasi), u haqda xabar beriladi.
 
 **Bitta tokenga bitta bot.** Telegram bir tokenga bitta ulanish beradi. Ikkinchi nusxa
 ishga tushsa, yangilanishlar ikkiga bo'linadi va odam «kod noto'g'ri», «hisob bog'lanmagan»
