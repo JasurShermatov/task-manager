@@ -184,6 +184,7 @@ class TaskOut(Model):
     late_days: int = 0
     late_hours: int = 0
     proof_count: int = 0
+    file_count: int = 0
     comment_count: int = 0
     # dalil shartmi: boshliq bilan assistant bir-biriga bergan vazifada shart emas
     needs_proof: bool = True

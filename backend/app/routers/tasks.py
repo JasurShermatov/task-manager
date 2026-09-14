@@ -283,12 +283,12 @@ async def upload(task_id: int, file: UploadFile = File(...), kind: str = Form("p
         kind = "proof"
     data = await file.read()
     mime = file.content_type or "application/octet-stream"
-    limit = settings.MAX_IMAGE_MB if mime.startswith("image/") else settings.MAX_DOC_MB
+    limit = settings.MAX_IMAGE_MB if fsvc.is_image(mime) else settings.MAX_DOC_MB
     if len(data) > limit * 1024 * 1024:
         raise validation("FILE_TOO_LARGE", f"Fayl {limit} MB dan katta bo'lmasligi kerak.",
                          field_errors={"file": "too_large"}, limit_mb=limit)
-    if mime not in fsvc.ALLOWED and not mime.startswith("image/"):
-        raise validation("FILE_TYPE", "Bu turdagi fayl qabul qilinmaydi.", field_errors={"file": "type"})
+    # Tur bo'yicha cheklov yo'q: fayl har doim yuklab olish sifatida beriladi, shuning
+    # uchun ichidagi narsa brauzerda bajarilmaydi. Yagona chegara — hajm.
     key = fsvc.store(data, file.filename or "file")
     row = TaskFile(task_id=t.id, kind=kind, storage_key=key, filename=(file.filename or "file")[:250],
                    mime_type=mime, size=len(data), uploaded_by=ctx.user.id, source=ctx.source)

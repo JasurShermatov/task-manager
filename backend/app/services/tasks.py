@@ -159,6 +159,14 @@ def enrich(db: Session, tasks: list[Task], ctx: Ctx, *, detail: bool = False) ->
                 TaskFile.task_id.in_(ids), TaskFile.is_active.is_(True), TaskFile.kind == "proof"
             ).group_by(TaskFile.task_id)):
         proofs[tid] = n
+    # Hamma fayl: vazifaga biriktirilgani ham, dalil ham. Botdagi «Fayllar» tugmasi
+    # shunga qarab chiqadi — web'dan qo'yilgan hujjat ham ko'rinsin.
+    all_files: dict[int, int] = {}
+    for tid, n in db.execute(
+            select(TaskFile.task_id, func.count()).where(
+                TaskFile.task_id.in_(ids), TaskFile.is_active.is_(True)
+            ).group_by(TaskFile.task_id)):
+        all_files[tid] = n
     comments: dict[int, int] = {}
     for tid, n in db.execute(
             select(TaskComment.task_id, func.count()).where(TaskComment.task_id.in_(ids))
@@ -190,6 +198,7 @@ def enrich(db: Session, tasks: list[Task], ctx: Ctx, *, detail: bool = False) ->
             "is_late": late > 0,
             "late_days": late // 86400, "late_hours": late // 3600,
             "proof_count": proofs.get(t.id, 0), "comment_count": comments.get(t.id, 0),
+            "file_count": all_files.get(t.id, 0),
             "needs_proof": proof_required(db, t),
             "permissions": task_perms(ctx, t),
             "files": [], "comments": [],
