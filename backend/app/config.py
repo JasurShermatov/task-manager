@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://saff:saff@localhost:5432/saff_tasks"
     REDIS_URL: str = "redis://localhost:6379/0"
     JWT_SECRET: str = "dev-secret"
-    ACCESS_TTL_MIN: int = 15
-    REFRESH_TTL_DAYS: int = 14
+    ACCESS_TTL_MIN: int = 15        # kirish tokeni; eskirsa refresh bilan jimgina yangilanadi
+    REFRESH_TTL_DAYS: int = 15      # shuncha kun qayta login so'ralmaydi
     SERVICE_TOKEN: str = "dev-service-token"
     FILE_SIGNING_SECRET: str = "dev-file-secret"
     UPLOAD_DIR: str = "./uploads"
