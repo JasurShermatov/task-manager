@@ -235,6 +235,13 @@ ro'yxat cho'zilib ketardi.
 1700px dan keng — 16px), telefonda esa ixchamlashadi va ikki ustun biri ostiga ikkinchisi
 tushadi. Bitta joyda ham gorizontal aylantirish bo'lmaydi.
 
+**Login katta-kichik harfga qaramaydi.** Bazada u kichik harfda saqlanadi, kirishda
+esa harf va bo'sh joylar tekislanadi — telefon birinchi harfni kattalashtirib yuborsa
+ham odam kira oladi.
+
+**Parol almashtirish:** xodim kartochkasida yangi parolni yozib «Saqlash» bosilsa
+yetadi — yonidagi kichik tugma ham ishlaydi, lekin majburiy emas.
+
 Ruxsat **har so'rovda serverda** tekshiriladi — manzilni qo'lda yozib kirishga ham yo'l yopiq.
 
 ---

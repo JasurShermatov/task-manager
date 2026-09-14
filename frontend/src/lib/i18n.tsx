@@ -64,6 +64,7 @@ const uz = {
   // administratsiya
   ad_deps: 'Bo\'limlar', ad_staff: 'Asosiy bo\'lim xodimlari', ad_assistants: 'Assistantlar',
   ad_new_asst: '+ Assistant',
+  ad_pass_hint: '«Saqlash» bosilganda parol ham almashadi',
   ad_asst_hint: 'Assistant boshliq bilan huquqda teng: vazifa beradi, qabul qiladi, bo\'lim va xodimlarni boshqaradi. Assistant hisoblarini esa faqat boshliq ochadi va o\'chiradi.',
   ad_dep_name: 'Bo\'lim nomi', ad_head: 'Boshlig\'i', ad_no_head: 'Boshliq yo\'q',
   ad_new_dep: '+ Bo\'lim', ad_new_head: '+ Bo\'lim boshlig\'i', ad_new_staff: '+ Xodim',
@@ -131,6 +132,7 @@ const ru: typeof uz = {
   rep_late_list: 'Просроченные', rep_notdone_list: 'Не сделанные',
   ad_deps: 'Отделы', ad_staff: 'Сотрудники основного отдела', ad_assistants: 'Ассистенты',
   ad_new_asst: '+ Ассистент',
+  ad_pass_hint: 'При нажатии «Сохранить» пароль тоже изменится',
   ad_asst_hint: 'Ассистент равен начальнику в правах: ставит и принимает задачи, управляет отделами и сотрудниками. Но сами учётные записи ассистентов создаёт и удаляет только начальник.',
   ad_dep_name: 'Название отдела', ad_head: 'Начальник', ad_no_head: 'Нет начальника',
   ad_new_dep: '+ Отдел', ad_new_head: '+ Начальник отдела', ad_new_staff: '+ Сотрудник',
@@ -197,6 +199,7 @@ const en: typeof uz = {
   rep_late_list: 'Late ones', rep_notdone_list: 'Not done',
   ad_deps: 'Departments', ad_staff: 'Main department staff', ad_assistants: 'Assistants',
   ad_new_asst: '+ Assistant',
+  ad_pass_hint: 'Pressing Save will change the password too',
   ad_asst_hint: 'An assistant has the same rights as the boss: assigns and accepts tasks, manages departments and staff. Only the boss can create or remove assistant accounts.',
   ad_dep_name: 'Department name', ad_head: 'Head', ad_no_head: 'No head',
   ad_new_dep: '+ Department', ad_new_head: '+ Department head', ad_new_staff: '+ Employee',

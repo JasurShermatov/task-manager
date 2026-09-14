@@ -270,6 +270,13 @@ function PersonForm({ user, departments, lockRole, onClose }:
         await post('/users', { ...body, login: f.login.trim(), password: f.password })
       } else {
         await patch(`/users/${user.id}`, { ...body, login: f.login.trim() })
+        // Yangi parol yozilgan bo'lsa, uni ham qo'llaymiz. Ilgari buning uchun
+        // yonidagi kichik tugmani bosish kerak edi: odam parolni yozib «Saqlash»
+        // bosardi va parol o'zgarmay qolardi — sababi ham ko'rinmasdi.
+        if (newPass.trim()) {
+          await post(`/users/${user.id}/password`, { password: newPass.trim() })
+          setNewPass('')
+        }
       }
       toast(t('ad_saved')); onClose()
     } catch (e) { toastErr(e) } finally { setBusy(false) }
@@ -316,10 +323,13 @@ function PersonForm({ user, departments, lockRole, onClose }:
           </select>
         </label>}
         {!isNew && (
-          <div className="full row wrap">
-            <input className="inp inp--sm" placeholder={t('ad_newpass')} value={newPass}
-                   onChange={e => setNewPass(e.target.value)} />
-            <button className="btn btn--sm" disabled={busy || !newPass} onClick={setPass}>{t('ad_setpass')}</button>
+          <div className="full">
+            <div className="row wrap">
+              <input className="inp inp--sm" placeholder={t('ad_newpass')} value={newPass}
+                     onChange={e => setNewPass(e.target.value)} />
+              <button className="btn btn--sm" disabled={busy || !newPass} onClick={setPass}>{t('ad_setpass')}</button>
+            </div>
+            {!!newPass.trim() && <span className="hint">{t('ad_pass_hint')}</span>}
           </div>
         )}
       </div>
