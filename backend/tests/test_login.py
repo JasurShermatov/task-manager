@@ -98,3 +98,38 @@ def test_refresh_token_lasts_fifteen_days(client, world):
     days = (row.expires_at - datetime.utcnow()).days
     db.close()
     assert days == 14, f"15 kun kutilgan edi, {days + 1} chiqdi"   # 14 kun + qolgan soatlar
+
+
+# ---------------------------------------------------------------- serverdan parol qo'yish
+def test_set_password_command_actually_works(client, boss):
+    """Web ishlamay qolsa ham parolni serverdan qo'yish yo'li bo'lsin — va u
+    o'zini tekshirsin, "qo'ydim lekin kirmayapti" holati qolmasin."""
+    from app import set_password as cmd
+
+    boss.post("/users", json={"full_name": "Cli Sinovi", "login": "CLI.User",
+                              "password": "parol123", "role": "ijrochi"})
+    assert cmd.main(["cli.user", "Yangi-2026"]) == 0
+    assert _login(client, "CLI.User", "Yangi-2026").status_code == 200
+    assert _login(client, "cli.user", "parol123").status_code == 401
+
+
+def test_set_password_finds_the_login_whatever_the_case(client, boss):
+    from app import set_password as cmd
+    assert cmd.main(["CLI.USER", "Boshqa-2026"]) == 0
+    assert _login(client, "cli.user", "Boshqa-2026").status_code == 200
+
+
+def test_set_password_says_when_there_is_no_such_login():
+    from app import set_password as cmd
+    assert cmd.main(["yoq-bunday-login", "parol123"]) == 1
+
+
+def test_set_password_unlocks_too(client, boss):
+    from app import set_password as cmd
+    boss.post("/users", json={"full_name": "Cli Qulf", "login": "cliqulf",
+                              "password": "parol123", "role": "ijrochi"})
+    for _ in range(5):
+        _login(client, "cliqulf", "xato")
+    assert _login(client, "cliqulf", "parol123").status_code == 429
+    assert cmd.main(["cliqulf", "Ochildi-1"]) == 0
+    assert _login(client, "cliqulf", "Ochildi-1").status_code == 200

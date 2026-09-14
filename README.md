@@ -48,6 +48,16 @@ docker compose up -d --build
 50 asosiy bo'lim xodimi), uch oylik tarix bilan ~360 vazifa — vaqtida bajarilgani, kechikkani,
 bajarilmagani va qaytarilgani aralash, hisobot darhol ko'rinsin uchun. Oxirida o'zini tekshiradi.
 
+### Parol esdan chiqsa yoki kirib bo'lmasa
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm api python -m app.set_password --list
+docker compose -f docker-compose.prod.yml run --rm api python -m app.set_password axmad Yangi-2026
+```
+
+Parolni qo'yadi, eski sessiyalarni yopadi, qulfni ochadi va o'sha parol bilan
+tekshirib ko'radi. Web ishlamay qolsa ham ishlaydi.
+
 ### Ishga tushmasa
 
 | Belgi | Sabab va yechim |
